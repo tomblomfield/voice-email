@@ -47,6 +47,7 @@ Edit `.env` and fill in your keys:
 | `GOOGLE_CLIENT_ID` | OAuth 2.0 client ID from Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | OAuth 2.0 client secret from Google Cloud Console |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:3000/api/auth/callback` (default) |
+| `VOICEMAIL_SITE_URL` | Optional footer link used in outbound emails |
 
 ### 4. Run
 

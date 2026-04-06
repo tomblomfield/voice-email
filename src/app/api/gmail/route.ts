@@ -58,7 +58,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ messages });
       }
       case "reply": {
-        await sendReply(tokens, params.messageId, params.threadId, params.body);
+        const userEmail = await getUserEmail(tokens);
+        await sendReply(
+          tokens,
+          params.messageId,
+          params.threadId,
+          params.body,
+          userEmail
+        );
         return NextResponse.json({ success: true });
       }
       case "archive": {
@@ -78,7 +85,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ contacts });
       }
       case "compose": {
-        await sendNewEmail(tokens, params.to, params.subject, params.body);
+        const userEmail = await getUserEmail(tokens);
+        await sendNewEmail(
+          tokens,
+          params.to,
+          params.subject,
+          params.body,
+          userEmail
+        );
         return NextResponse.json({ success: true });
       }
       default:
