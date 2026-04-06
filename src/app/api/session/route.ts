@@ -12,7 +12,10 @@ export async function GET(request: NextRequest) {
     // Log session start with user email
     try {
       const tokens = decryptTokens(cookie.value);
-      const oauth2Client = new google.auth.OAuth2();
+      const oauth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET
+      );
       oauth2Client.setCredentials(tokens);
       const gmail = google.gmail({ version: "v1", auth: oauth2Client });
       const profile = await gmail.users.getProfile({ userId: "me" });
