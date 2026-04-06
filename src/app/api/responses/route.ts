@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { decryptTokens, hasRequiredGoogleScopes } from "@/app/lib/gmail";
 
 // Proxy endpoint for the OpenAI Responses API
 export async function POST(req: NextRequest) {
   const cookie = req.cookies.get("gmail_tokens");
   if (!cookie) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const tokens = decryptTokens(cookie.value);
+    if (!hasRequiredGoogleScopes(tokens)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

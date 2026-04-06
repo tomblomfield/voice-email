@@ -1,4 +1,5 @@
 import { RealtimeAgent, tool } from "@openai/agents/realtime";
+import type { InferredCalendarProfile } from "@/app/lib/calendar";
 
 async function gmailApi(body: Record<string, any>) {
   const res = await fetch("/api/gmail", {
@@ -28,17 +29,42 @@ export interface EmailTriageDeps {
   advanceIndex: () => void;
   recordAction: (action: "reply" | "skip" | "archive") => void;
   getActionSummary: () => { replied: number; skipped: number; archived: number };
+  calendarProfile: () => InferredCalendarProfile | null;
+  setCalendarProfile: (profile: InferredCalendarProfile) => void;
 }
 
 export function createEmailTriageAgent(deps: EmailTriageDeps) {
+  async function getOrLoadCalendarProfile() {
+    const cached = deps.calendarProfile();
+    if (cached) return { profile: cached, cached: true };
+
+    const data = await gmailApi({ action: "calendarSetup" });
+    if (data.error) return { error: data.error };
+    deps.setCalendarProfile(data.profile);
+    return { profile: data.profile as InferredCalendarProfile, cached: false };
+  }
+
+  function summarizeCalendarProfile(profile: InferredCalendarProfile, cached: boolean) {
+    return {
+      cached,
+      scannedEvents: profile.scannedEvents,
+      homeAddress: profile.homeAddress?.value || null,
+      homeConfidence: profile.homeAddress?.confidence || null,
+      workAddress: profile.workAddress?.value || null,
+      workConfidence: profile.workAddress?.confidence || null,
+      zoomLink: profile.zoomLink?.value || null,
+      zoomConfidence: profile.zoomLink?.confidence || null,
+    };
+  }
+
   return new RealtimeAgent({
     name: "emailTriage",
     voice: "ash",
-    handoffDescription: "Voice email triage assistant for hands-free driving",
+    handoffDescription: "Voice email and calendar assistant for hands-free driving",
 
     instructions: `
 # Role
-You are a hands-free email assistant designed for someone driving to work. Be concise, conversational, and efficient. The user cannot look at a screen — everything must be communicated by voice.
+You are a hands-free email and calendar assistant designed for someone driving to work. Be concise, conversational, and efficient. The user cannot look at a screen, so everything must be communicated by voice.
 
 # CRITICAL RULE
 NEVER invent, guess, or assume any email content. You MUST call get_email_count and get_next_email and wait for results before mentioning any sender, subject, or content. If you don't have tool results yet, just say you're checking their inbox — do NOT make up placeholder emails.
@@ -59,6 +85,15 @@ NEVER invent, guess, or assume any email content. You MUST call get_email_count 
 - The user can ask to find old emails at any time (e.g., "Did Sarah send me that report?"). Use search_emails with Gmail search syntax.
 - The user can ask to send a new email (e.g., "Send an email to Denisa"). Use find_contact to resolve the name to an email address. If multiple matches, read the top 2-3 and ask which one. Then ask what they want to say, draft it, read it back, and confirm before sending with send_new_email.
 - Always confirm recipient, subject, and body before sending a new email.
+
+# Calendar
+- If the user asks about their calendar, use list_calendar_events.
+- Before the first calendar-related task in a session, call run_calendar_setup. This is the setup phase. It scans past calendar invites and tries to infer the user's home address, work address, and Zoom link for this runtime only.
+- When you describe the setup results, make clear these are inferred from past invites, not stored facts.
+- If the user asks "what's my home address", "what's my work address", or "what's my Zoom link", call run_calendar_setup and answer from the results.
+- When the user wants to schedule or send a calendar invite, confirm the title, date, start time, end time, attendees, and location before using create_calendar_invite.
+- If the user says "at home", "at my office", "at work", or "on Zoom", use create_calendar_invite with the matching location_preference.
+- Never invent a home address, work address, or Zoom link. If setup cannot infer one confidently enough, tell the user and ask for a custom location instead.
 
 # Filters
 - If the user asks what Gmail filters are active, call list_gmail_filters and summarize the relevant ones.
@@ -84,6 +119,23 @@ You decide the order — use your judgment. The user trusts you to surface the i
 `,
 
     tools: [
+      tool({
+        name: "run_calendar_setup",
+        description:
+          "Infer the user's home address, work address, and Zoom link from past Google Calendar invites. Call this before the first calendar task in a session and whenever the user asks what those defaults are.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+        execute: async () => {
+          const result = await getOrLoadCalendarProfile();
+          if ("error" in result) return { error: result.error };
+          return summarizeCalendarProfile(result.profile, result.cached);
+        },
+      }),
+
       tool({
         name: "get_email_count",
         description:
@@ -411,6 +463,57 @@ You decide the order — use your judgment. The user trusts you to surface the i
       }),
 
       tool({
+        name: "list_calendar_events",
+        description:
+          "List Google Calendar events in a time range. Use this when the user asks what is on their calendar today, tomorrow, this afternoon, or during any specific window.",
+        parameters: {
+          type: "object",
+          properties: {
+            start_time: {
+              type: "string",
+              description: "Start of the time window in ISO 8601 format.",
+            },
+            end_time: {
+              type: "string",
+              description: "End of the time window in ISO 8601 format.",
+            },
+            query: {
+              type: "string",
+              description: "Optional Google Calendar search query.",
+            },
+            max_results: {
+              type: "number",
+              description: "Maximum number of events to return. Defaults to 10.",
+            },
+          },
+          required: [],
+          additionalProperties: false,
+        },
+        execute: async (args: any) => {
+          const data = await gmailApi({
+            action: "calendarList",
+            startTime: args.start_time,
+            endTime: args.end_time,
+            query: args.query,
+            maxResults: args.max_results || 10,
+          });
+          if (data.error) return { error: data.error };
+          return {
+            count: data.events?.length || 0,
+            events: (data.events || []).map((event: any) => ({
+              id: event.id,
+              summary: event.summary,
+              start: event.start,
+              end: event.end,
+              location: event.location,
+              attendees: event.attendees,
+              htmlLink: event.htmlLink,
+            })),
+          };
+        },
+      }),
+
+      tool({
         name: "list_gmail_filters",
         description:
           "List the user's active Gmail filters. Use this when the user asks what filters are currently active.",
@@ -426,6 +529,85 @@ You decide the order — use your judgment. The user trusts you to surface the i
           return {
             count: data.filters?.length || 0,
             filters: data.filters || [],
+          };
+        },
+      }),
+
+      tool({
+        name: "create_calendar_invite",
+        description:
+          "Create a Google Calendar event and send invitations to attendees. Use run_calendar_setup first if the event should use the user's home address, work address, or Zoom link.",
+        parameters: {
+          type: "object",
+          properties: {
+            title: {
+              type: "string",
+              description: "Event title",
+            },
+            start_time: {
+              type: "string",
+              description: "Event start time in ISO 8601 format.",
+            },
+            end_time: {
+              type: "string",
+              description: "Event end time in ISO 8601 format.",
+            },
+            time_zone: {
+              type: "string",
+              description: "Optional IANA timezone like America/Los_Angeles.",
+            },
+            attendee_emails: {
+              type: "array",
+              items: { type: "string" },
+              description: "Attendee email addresses.",
+            },
+            notes: {
+              type: "string",
+              description: "Optional event notes or description.",
+            },
+            location_preference: {
+              type: "string",
+              enum: ["home", "work", "zoom", "custom", "none"],
+              description:
+                "Use an inferred runtime default or a custom location. Choose home, work, or zoom when the user refers to those saved concepts.",
+            },
+            custom_location: {
+              type: "string",
+              description: "Required when location_preference is custom.",
+            },
+          },
+          required: ["title", "start_time", "end_time"],
+          additionalProperties: false,
+        },
+        execute: async (args: any) => {
+          let inferredProfile = deps.calendarProfile();
+          if (
+            !inferredProfile &&
+            ["home", "work", "zoom"].includes(args.location_preference)
+          ) {
+            const setup = await getOrLoadCalendarProfile();
+            if ("error" in setup) return { error: setup.error };
+            inferredProfile = setup.profile;
+          }
+
+          const data = await gmailApi({
+            action: "calendarCreate",
+            title: args.title,
+            startTime: args.start_time,
+            endTime: args.end_time,
+            timeZone: args.time_zone,
+            attendeeEmails: args.attendee_emails,
+            notes: args.notes,
+            locationPreference: args.location_preference,
+            customLocation: args.custom_location,
+            inferredProfile,
+          });
+          if (data.error) return { error: data.error };
+          return {
+            success: true,
+            event: data.event,
+            usedProfileFields: data.usedProfileFields || [],
+            message: "Calendar invite created.",
           };
         },
       }),

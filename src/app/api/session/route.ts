@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { decryptTokens } from "@/app/lib/gmail";
+import { decryptTokens, hasRequiredGoogleScopes } from "@/app/lib/gmail";
 import { google } from "googleapis";
 
 export async function GET(request: NextRequest) {
@@ -9,9 +9,13 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const tokens = decryptTokens(cookie.value);
+    if (!hasRequiredGoogleScopes(tokens)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     // Log session start with user email
     try {
-      const tokens = decryptTokens(cookie.value);
       const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
         process.env.GOOGLE_CLIENT_SECRET

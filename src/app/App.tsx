@@ -11,6 +11,7 @@ import {
   createEmailTriageAgent,
   EmailData,
 } from "@/app/agentConfigs/emailTriage";
+import type { InferredCalendarProfile } from "@/app/lib/calendar";
 
 type AuthState = {
   authenticated: boolean;
@@ -43,6 +44,7 @@ function App() {
   const emailsRef = useRef<EmailData[]>([]);
   const emailIndexRef = useRef<number>(0);
   const actionsRef = useRef({ replied: 0, skipped: 0, archived: 0 });
+  const calendarProfileRef = useRef<InferredCalendarProfile | null>(null);
 
   // Reconnection state
   const connectOptionsRef = useRef<{
@@ -215,6 +217,7 @@ function App() {
       emailsRef.current = [];
       emailIndexRef.current = 0;
       actionsRef.current = { replied: 0, skipped: 0, archived: 0 };
+      calendarProfileRef.current = null;
 
       // Create agent with deps — emails will be populated by get_email_count tool
       const agent = createEmailTriageAgent({
@@ -230,6 +233,10 @@ function App() {
           };
         },
         getActionSummary: () => ({ ...actionsRef.current }),
+        calendarProfile: () => calendarProfileRef.current,
+        setCalendarProfile: (profile) => {
+          calendarProfileRef.current = profile;
+        },
       });
 
       const EPHEMERAL_KEY = await fetchEphemeralKey();
@@ -317,14 +324,14 @@ function App() {
       <div className="flex flex-col items-center justify-center h-screen bg-gray-950 text-white gap-6 px-8">
         <div className="text-4xl font-bold">Voicemail AI</div>
         <p className="text-gray-400 text-center text-lg max-w-md">
-          Hands-free email triage for your commute. Connect your Gmail to get
-          started.
+          Hands-free email and calendar for your commute. Connect your Google
+          account to get started.
         </p>
         <a
           href="/api/auth"
           className="bg-white text-gray-950 font-semibold text-xl px-8 py-4 rounded-2xl active:scale-95 transition-transform"
         >
-          Connect Gmail
+          Connect Google
         </a>
       </div>
     );
@@ -333,8 +340,8 @@ function App() {
   return (
     <div className="flex flex-col items-center justify-between h-screen bg-gray-950 text-white px-6 py-10 select-none">
       <div className="text-center">
-        <h1 className="text-2xl font-bold tracking-tight">Voicemail AI</h1>
-        <p className="text-gray-500 text-sm mt-1">Hands-free email</p>
+        <h1 className="text-2xl font-bold tracking-tight">Voice Nav</h1>
+        <p className="text-gray-500 text-sm mt-1">Hands-free email + calendar</p>
         {!filterWriteEnabled && (
           <a
             href="/api/auth"

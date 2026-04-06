@@ -1,5 +1,19 @@
 import { google } from "googleapis";
 import crypto from "crypto";
+import {
+  inferCalendarProfile as inferCalendarProfileFromEvents,
+  resolveCalendarInviteDetails,
+  type CalendarInferenceEvent,
+  type InferredCalendarProfile,
+} from "@/app/lib/calendar";
+
+const REQUIRED_GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
+] as const;
 
 export const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
@@ -94,7 +108,7 @@ export function getAuthUrl(): string {
   return getOAuth2Client().generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
-    scope: [...GMAIL_SCOPES],
+    scope: [...REQUIRED_GOOGLE_SCOPES],
   });
 }
 
@@ -126,6 +140,16 @@ export function decryptTokens(encrypted: string): any {
   return JSON.parse(decrypted);
 }
 
+export function hasRequiredGoogleScopes(tokens: any): boolean {
+  const grantedScopes = String(tokens?.scope || "")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (grantedScopes.length === 0) return false;
+
+  return REQUIRED_GOOGLE_SCOPES.every((scope) => grantedScopes.includes(scope));
+}
+
 export function getMissingScopes(
   tokens: any,
   requiredScopes: readonly string[] = GMAIL_SCOPES
@@ -147,6 +171,10 @@ function getAuthedClient(tokens: any) {
 
 function getGmail(tokens: any) {
   return google.gmail({ version: "v1", auth: getAuthedClient(tokens) });
+}
+
+function getCalendar(tokens: any) {
+  return google.calendar({ version: "v3", auth: getAuthedClient(tokens) });
 }
 
 function requireScopes(tokens: any, requiredScopes: readonly string[]) {
@@ -397,6 +425,36 @@ export async function getUserEmail(tokens: any): Promise<string> {
   const gmail = getGmail(tokens);
   const profile = await gmail.users.getProfile({ userId: "me" });
   return profile.data.emailAddress || "";
+}
+
+export interface CalendarEventSummary {
+  id: string;
+  summary: string;
+  description: string;
+  start: string;
+  end: string;
+  location: string;
+  attendees: string[];
+  htmlLink: string;
+}
+
+export interface CalendarListOptions {
+  startTime?: string;
+  endTime?: string;
+  maxResults?: number;
+  query?: string;
+}
+
+export interface CreateCalendarInviteInput {
+  title: string;
+  startTime: string;
+  endTime: string;
+  timeZone?: string;
+  attendeeEmails?: string[];
+  notes?: string;
+  customLocation?: string;
+  locationPreference?: "home" | "work" | "zoom" | "custom" | "none";
+  inferredProfile?: InferredCalendarProfile | null;
 }
 
 export interface EmailSummary {
@@ -905,4 +963,134 @@ export async function sendNewEmail(
     userId: "me",
     requestBody: { raw: encoded },
   });
+}
+
+function formatEventDateTime(dateTime?: string | null, date?: string | null): string {
+  if (dateTime) return dateTime;
+  if (date) return `${date}T00:00:00`;
+  return "";
+}
+
+function mapCalendarEvent(event: any): CalendarEventSummary {
+  return {
+    id: event.id || "",
+    summary: event.summary || "(untitled)",
+    description: event.description || "",
+    start: formatEventDateTime(event.start?.dateTime, event.start?.date),
+    end: formatEventDateTime(event.end?.dateTime, event.end?.date),
+    location: event.location || "",
+    attendees: (event.attendees || [])
+      .map((attendee: any) => attendee.email)
+      .filter(Boolean),
+    htmlLink: event.htmlLink || "",
+  };
+}
+
+export async function listCalendarEvents(
+  tokens: any,
+  options: CalendarListOptions = {}
+): Promise<CalendarEventSummary[]> {
+  const calendar = getCalendar(tokens);
+  const now = new Date();
+  const defaultEnd = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const response = await calendar.events.list({
+    calendarId: "primary",
+    singleEvents: true,
+    orderBy: "startTime",
+    timeMin: options.startTime || now.toISOString(),
+    timeMax: options.endTime || defaultEnd.toISOString(),
+    maxResults: options.maxResults || 10,
+    q: options.query || undefined,
+  });
+
+  return (response.data.items || []).map(mapCalendarEvent);
+}
+
+export async function inferCalendarProfile(
+  tokens: any
+): Promise<InferredCalendarProfile> {
+  const calendar = getCalendar(tokens);
+  const now = new Date();
+  const timeMax = now.toISOString();
+  const timeMin = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000).toISOString();
+  const response = await calendar.events.list({
+    calendarId: "primary",
+    singleEvents: true,
+    orderBy: "startTime",
+    timeMin,
+    timeMax,
+    maxResults: 250,
+  });
+
+  const events: CalendarInferenceEvent[] = (response.data.items || []).map((event: any) => ({
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    start: formatEventDateTime(event.start?.dateTime, event.start?.date),
+    attendeeCount: event.attendees?.length || 0,
+    conferenceUrls: (event.conferenceData?.entryPoints || [])
+      .map((entryPoint: any) => entryPoint.uri)
+      .filter(Boolean),
+  }));
+
+  return inferCalendarProfileFromEvents(events);
+}
+
+async function getPrimaryCalendarTimeZone(tokens: any): Promise<string | undefined> {
+  const calendar = getCalendar(tokens);
+  const response = await calendar.calendarList.get({ calendarId: "primary" });
+  return response.data.timeZone || undefined;
+}
+
+export async function createCalendarInvite(
+  tokens: any,
+  input: CreateCalendarInviteInput
+): Promise<{
+  event: CalendarEventSummary;
+  usedProfileFields: string[];
+}> {
+  const resolved = resolveCalendarInviteDetails({
+    notes: input.notes,
+    customLocation: input.customLocation,
+    locationPreference: input.locationPreference,
+    inferredProfile: input.inferredProfile,
+  });
+
+  if (resolved.error) {
+    throw new Error(resolved.error);
+  }
+
+  const attendeeEmails = Array.from(
+    new Set((input.attendeeEmails || []).map((email) => email.trim().toLowerCase()).filter(Boolean))
+  );
+  const timeZone = input.timeZone || (await getPrimaryCalendarTimeZone(tokens));
+  const usedProfileFields: string[] = [];
+  if (input.locationPreference === "home") usedProfileFields.push("homeAddress");
+  if (input.locationPreference === "work") usedProfileFields.push("workAddress");
+  if (input.locationPreference === "zoom") usedProfileFields.push("zoomLink");
+
+  const calendar = getCalendar(tokens);
+  const response = await calendar.events.insert({
+    calendarId: "primary",
+    sendUpdates: attendeeEmails.length > 0 ? "all" : "none",
+    requestBody: {
+      summary: input.title,
+      description: resolved.description,
+      location: resolved.location,
+      start: {
+        dateTime: input.startTime,
+        timeZone,
+      },
+      end: {
+        dateTime: input.endTime,
+        timeZone,
+      },
+      attendees: attendeeEmails.map((email) => ({ email })),
+    },
+  });
+
+  return {
+    event: mapCalendarEvent(response.data),
+    usedProfileFields,
+  };
 }
