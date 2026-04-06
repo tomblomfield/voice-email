@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { decryptTokens } from "@/app/lib/gmail";
+import { google } from "googleapis";
 
 export async function GET(request: NextRequest) {
   const cookie = request.cookies.get("gmail_tokens");
@@ -7,6 +9,17 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    // Log session start with user email
+    try {
+      const tokens = decryptTokens(cookie.value);
+      const oauth2Client = new google.auth.OAuth2();
+      oauth2Client.setCredentials(tokens);
+      const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+      const profile = await gmail.users.getProfile({ userId: "me" });
+      console.log(`session_started: ${profile.data.emailAddress}`);
+    } catch {
+      console.log("session_started: unknown_user");
+    }
     const response = await fetch(
       "https://api.openai.com/v1/realtime/sessions",
       {
