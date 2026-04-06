@@ -3,7 +3,7 @@ import "./globals.css";
 import "./lib/envSetup";
 
 export const metadata: Metadata = {
-  title: "Voice Nav",
+  title: "Voicemail AI",
   description: "Hands-free email triage for your commute.",
 };
 

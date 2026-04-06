@@ -71,6 +71,11 @@ export class GmailScopeError extends Error {
   }
 }
 
+const FOOTER_ELIGIBLE_SENDERS = new Set([
+  "tomblomfield@gmail.com",
+  "tb@ycombinator.com",
+]);
+
 function getEncryptionKey(): string {
   const key = process.env.SESSION_SECRET;
   if (!key) throw new Error("SESSION_SECRET environment variable is required");
@@ -344,6 +349,50 @@ async function getEmailMetadata(
   };
 }
 
+function normalizeEmailAddress(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+export function shouldAddVoicemailFooter(userEmail: string): boolean {
+  return FOOTER_ELIGIBLE_SENDERS.has(normalizeEmailAddress(userEmail));
+}
+
+export function getVoicemailSiteUrl(): string {
+  const candidates = [
+    process.env.VOICEMAIL_SITE_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.APP_URL,
+    process.env.RAILWAY_PUBLIC_DOMAIN,
+    process.env.RAILWAY_STATIC_URL,
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const url = normalizeUrl(candidate);
+    if (url) return url;
+  }
+
+  return "https://railway.app";
+}
+
+export function appendVoicemailFooter(body: string, userEmail: string): string {
+  if (!shouldAddVoicemailFooter(userEmail)) return body;
+
+  const trimmedBody = body.replace(/\s+$/, "");
+  const footer = `sent with voicemail\n${getVoicemailSiteUrl()}`;
+
+  if (!trimmedBody) return footer;
+
+  return `${trimmedBody}\n\n${footer}`;
+}
+
 export async function getUserEmail(tokens: any): Promise<string> {
   const gmail = getGmail(tokens);
   const profile = await gmail.users.getProfile({ userId: "me" });
@@ -518,7 +567,8 @@ export async function sendReply(
   tokens: any,
   messageId: string,
   threadId: string,
-  body: string
+  body: string,
+  userEmail: string
 ): Promise<void> {
   const gmail = getGmail(tokens);
 
@@ -538,6 +588,7 @@ export async function sendReply(
     ? getHeader("Subject")
     : `Re: ${getHeader("Subject")}`;
   const messageIdHeader = getHeader("Message-ID");
+  const bodyWithFooter = appendVoicemailFooter(body, userEmail);
 
   const raw = [
     `To: ${to}`,
@@ -546,7 +597,7 @@ export async function sendReply(
     `References: ${messageIdHeader}`,
     `Content-Type: text/plain; charset="UTF-8"`,
     "",
-    body,
+    bodyWithFooter,
   ].join("\r\n");
 
   const encoded = Buffer.from(raw).toString("base64url");
@@ -834,16 +885,18 @@ export async function sendNewEmail(
   tokens: any,
   to: string,
   subject: string,
-  body: string
+  body: string,
+  userEmail: string
 ): Promise<void> {
   const gmail = getGmail(tokens);
+  const bodyWithFooter = appendVoicemailFooter(body, userEmail);
 
   const raw = [
     `To: ${to}`,
     `Subject: ${subject}`,
     `Content-Type: text/plain; charset="UTF-8"`,
     "",
-    body,
+    bodyWithFooter,
   ].join("\r\n");
 
   const encoded = Buffer.from(raw).toString("base64url");

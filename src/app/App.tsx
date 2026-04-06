@@ -315,7 +315,7 @@ function App() {
   if (!isAuthenticated) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-gray-950 text-white gap-6 px-8">
-        <div className="text-4xl font-bold">Voice Nav</div>
+        <div className="text-4xl font-bold">Voicemail AI</div>
         <p className="text-gray-400 text-center text-lg max-w-md">
           Hands-free email triage for your commute. Connect your Gmail to get
           started.
@@ -333,7 +333,7 @@ function App() {
   return (
     <div className="flex flex-col items-center justify-between h-screen bg-gray-950 text-white px-6 py-10 select-none">
       <div className="text-center">
-        <h1 className="text-2xl font-bold tracking-tight">Voice Nav</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Voicemail AI</h1>
         <p className="text-gray-500 text-sm mt-1">Hands-free email</p>
         {!filterWriteEnabled && (
           <a
