@@ -27,8 +27,8 @@ export interface EmailTriageDeps {
   setEmails: (emails: EmailData[]) => void;
   emailIndex: () => number;
   advanceIndex: () => void;
-  recordAction: (action: "reply" | "skip" | "archive") => void;
-  getActionSummary: () => { replied: number; skipped: number; archived: number };
+  recordAction: (action: "reply" | "skip" | "archive" | "block") => void;
+  getActionSummary: () => { replied: number; skipped: number; archived: number; blocked: number };
   calendarProfile: () => InferredCalendarProfile | null;
   setCalendarProfile: (profile: InferredCalendarProfile) => void;
 }
@@ -77,9 +77,10 @@ NEVER invent, guess, or assume any email content. You MUST call get_email_count 
    - **Reply**: Ask what they'd like to say. Draft the reply, read it back to them, and ask to confirm before sending. If they confirm, call reply_to_email. The email will be automatically archived after sending.
    - **Skip**: Call skip_email and move to the next one.
    - **Archive**: Call archive_email and move to the next one.
+   - **Block**: If the user says "block this sender", "block them", or similar, confirm who they're blocking, then call block_sender. This creates a Gmail filter that sends all future emails from that sender to trash and archives the current email.
 5. After each action, automatically call get_next_email for the next one.
 6. When get_next_email returns done=true, let them know they're all caught up and give the session summary.
-7. When the user says "I'm done", "that's all", "wrap up", or similar, call get_session_summary. Announce it naturally: "All set. You replied to X, skipped Y, and archived Z. You still have N left for later. Have a great day!"
+7. When the user says "I'm done", "that's all", "wrap up", or similar, call get_session_summary. Announce it naturally: "All set. You replied to X, skipped Y, archived Z, and blocked W. You still have N left for later. Have a great day!"
 
 # Search & Compose
 - The user can ask to find old emails at any time (e.g., "Did Sarah send me that report?"). Use search_emails with Gmail search syntax.
@@ -193,7 +194,8 @@ You decide the order — use your judgment. The user trusts you to surface the i
                 replied: summary.replied,
                 skipped: summary.skipped,
                 archived: summary.archived,
-                total: summary.replied + summary.skipped + summary.archived,
+                blocked: summary.blocked,
+                total: summary.replied + summary.skipped + summary.archived + summary.blocked,
               },
             };
           }
@@ -214,7 +216,8 @@ You decide the order — use your judgment. The user trusts you to surface the i
                   replied: summary.replied,
                   skipped: summary.skipped,
                   archived: summary.archived,
-                  total: summary.replied + summary.skipped + summary.archived,
+                  blocked: summary.blocked,
+                  total: summary.replied + summary.skipped + summary.archived + summary.blocked,
                 },
               };
             }
@@ -325,6 +328,37 @@ You decide the order — use your judgment. The user trusts you to surface the i
           if (data.error) return { error: data.error };
           deps.recordAction("archive");
           return { success: true, message: "Email archived." };
+        },
+      }),
+
+      tool({
+        name: "block_sender",
+        description:
+          "Block a sender so all their future emails go straight to trash. Also archives the current email. Only call this after the user explicitly confirms they want to block the sender.",
+        parameters: {
+          type: "object",
+          properties: {
+            message_id: {
+              type: "string",
+              description: "The ID of the email whose sender should be blocked",
+            },
+          },
+          required: ["message_id"],
+          additionalProperties: false,
+        },
+        execute: async (args: any) => {
+          const data = await gmailApi({
+            action: "blockSender",
+            messageId: args.message_id,
+          });
+          if (data.error) return data;
+          deps.recordAction("block");
+          return {
+            success: true,
+            blockedEmail: data.blockedEmail,
+            blockedName: data.blockedName,
+            message: `Blocked ${data.blockedName || data.blockedEmail}. All future emails from them will go to trash.`,
+          };
         },
       }),
 
@@ -696,7 +730,8 @@ You decide the order — use your judgment. The user trusts you to surface the i
             replied: summary.replied,
             skipped: summary.skipped,
             archived: summary.archived,
-            totalProcessed: summary.replied + summary.skipped + summary.archived,
+            blocked: summary.blocked,
+            totalProcessed: summary.replied + summary.skipped + summary.archived + summary.blocked,
             remaining: Math.max(0, emails.length - idx),
           };
           try {

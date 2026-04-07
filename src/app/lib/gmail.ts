@@ -833,6 +833,41 @@ export async function upsertArchiveFilterForEmail(
   }
 }
 
+export async function blockSender(
+  tokens: any,
+  messageId: string
+): Promise<{
+  blockedEmail: string;
+  blockedName: string;
+  filter: GmailFilterSummary;
+}> {
+  requireScopes(tokens, [GMAIL_FILTER_WRITE_SCOPE]);
+
+  const gmail = getGmail(tokens);
+  const message = await getEmailMetadata(tokens, messageId);
+
+  // Create a filter that auto-deletes all future emails from this sender
+  const criteria: GmailFilterCriteria = { from: message.fromEmail };
+  const action: GmailFilterAction = {
+    addLabelIds: ["TRASH"],
+    removeLabelIds: ["INBOX"],
+  };
+
+  const created = await gmail.users.settings.filters.create({
+    userId: "me",
+    requestBody: { criteria, action },
+  });
+
+  // Archive the current email too
+  await archiveEmail(tokens, messageId);
+
+  return {
+    blockedEmail: message.fromEmail,
+    blockedName: message.fromName,
+    filter: summarizeExistingFilter(created.data),
+  };
+}
+
 export async function searchEmails(
   tokens: any,
   query: string,

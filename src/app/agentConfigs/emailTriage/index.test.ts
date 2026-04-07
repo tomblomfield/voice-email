@@ -23,7 +23,7 @@ function makeDeps(emails: EmailData[] = []) {
   const state = {
     emails: [...emails],
     idx: 0,
-    actions: { replied: 0, skipped: 0, archived: 0 },
+    actions: { replied: 0, skipped: 0, archived: 0, blocked: 0 },
   };
   return {
     state,
@@ -32,10 +32,11 @@ function makeDeps(emails: EmailData[] = []) {
       setEmails: (e: EmailData[]) => { state.emails = e; },
       emailIndex: () => state.idx,
       advanceIndex: () => { state.idx++; },
-      recordAction: (action: "reply" | "skip" | "archive") => {
+      recordAction: (action: "reply" | "skip" | "archive" | "block") => {
         if (action === "reply") state.actions.replied++;
         else if (action === "skip") state.actions.skipped++;
         else if (action === "archive") state.actions.archived++;
+        else if (action === "block") state.actions.blocked++;
       },
       getActionSummary: () => ({ ...state.actions }),
     } satisfies EmailTriageDeps,
@@ -96,6 +97,12 @@ describe("EmailTriageDeps logic", () => {
       expect(state.actions.archived).toBe(1);
     });
 
+    it("tracks block actions", () => {
+      const { deps, state } = makeDeps();
+      deps.recordAction("block");
+      expect(state.actions.blocked).toBe(1);
+    });
+
     it("tracks mixed actions correctly", () => {
       const { deps } = makeDeps();
       deps.recordAction("reply");
@@ -103,11 +110,13 @@ describe("EmailTriageDeps logic", () => {
       deps.recordAction("archive");
       deps.recordAction("skip");
       deps.recordAction("reply");
+      deps.recordAction("block");
 
       const summary = deps.getActionSummary();
       expect(summary.replied).toBe(2);
       expect(summary.skipped).toBe(2);
       expect(summary.archived).toBe(1);
+      expect(summary.blocked).toBe(1);
     });
   });
 
@@ -122,7 +131,8 @@ describe("EmailTriageDeps logic", () => {
       expect(summary.replied).toBe(1);
       expect(summary.skipped).toBe(1);
       expect(summary.archived).toBe(0);
-      expect(summary.replied + summary.skipped + summary.archived).toBe(2);
+      expect(summary.blocked).toBe(0);
+      expect(summary.replied + summary.skipped + summary.archived + summary.blocked).toBe(2);
       expect(deps.emails().length - state.idx).toBe(1);
     });
 
@@ -167,6 +177,29 @@ describe("EmailTriageDeps logic", () => {
 
       expect(archiveResult.success).toBe(true);
       expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("block sender pattern", async () => {
+      mockFetch.mockResolvedValueOnce({
+        json: async () => ({
+          blockedEmail: "spammer@example.com",
+          blockedName: "Spammer",
+          filter: { id: "filter-1" },
+        }),
+      });
+
+      const blockResult = await mockFetch("/api/gmail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "blockSender",
+          messageId: "msg-1",
+        }),
+      }).then((r: any) => r.json());
+
+      expect(blockResult.blockedEmail).toBe("spammer@example.com");
+      expect(blockResult.blockedName).toBe("Spammer");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 });
