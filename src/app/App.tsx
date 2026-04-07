@@ -340,7 +340,7 @@ function App() {
   return (
     <div className="flex flex-col items-center justify-between h-screen bg-gray-950 text-white px-6 py-10 select-none">
       <div className="text-center">
-        <h1 className="text-2xl font-bold tracking-tight">Voice Nav</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Voicemail</h1>
         <p className="text-gray-500 text-sm mt-1">Hands-free email + calendar</p>
         {!filterWriteEnabled && (
           <a
