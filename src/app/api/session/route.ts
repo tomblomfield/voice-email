@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { decryptTokens, hasRequiredGoogleScopes } from "@/app/lib/gmail";
 import { google } from "googleapis";
 import { debugLog } from "@/app/lib/debugLog";
+import { initDb, upsertUser } from "@/app/lib/db";
 
 export async function GET(request: NextRequest) {
   const cookie = request.cookies.get("gmail_tokens");
@@ -24,7 +25,12 @@ export async function GET(request: NextRequest) {
       oauth2Client.setCredentials(tokens);
       const gmail = google.gmail({ version: "v1", auth: oauth2Client });
       const profile = await gmail.users.getProfile({ userId: "me" });
-      console.log(`session_started: ${profile.data.emailAddress}`);
+      const email = profile.data.emailAddress;
+      console.log(`session_started: ${email}`);
+      if (email) {
+        await initDb();
+        await upsertUser(email);
+      }
     } catch {
       console.log("session_started: unknown_user");
     }

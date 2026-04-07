@@ -26,6 +26,7 @@ import {
   listCalendarEvents,
 } from "@/app/lib/calendar-api";
 import { debugLog } from "@/app/lib/debugLog";
+import { updateUserProfile, getUserByEmail, getUserMemories, saveUserMemories } from "@/app/lib/db";
 
 function getTokens(request: NextRequest) {
   const cookie = request.cookies.get("gmail_tokens");
@@ -35,6 +36,163 @@ function getTokens(request: NextRequest) {
     return hasRequiredGoogleScopes(tokens) ? tokens : null;
   } catch {
     return null;
+  }
+}
+
+async function handleAction(action: string, params: any, tokens: any): Promise<any> {
+  switch (action) {
+    case "list": {
+      const emails = await getUnreadEmails(tokens, params.maxResults || 10);
+      const userEmail = await getUserEmail(tokens);
+      const actionable = emails.filter(
+        (e) => !e.from.toLowerCase().includes(userEmail.toLowerCase())
+      );
+      return { emails: actionable };
+    }
+    case "read": {
+      const body = await getEmailBody(tokens, params.messageId);
+      return { body };
+    }
+    case "readThread": {
+      const messages = await getThreadMessages(
+        tokens,
+        params.threadId,
+        params.maxMessages || 5
+      );
+      return { messages };
+    }
+    case "reply": {
+      const userEmail = await getUserEmail(tokens);
+      await sendReply(tokens, params.messageId, params.threadId, params.body, userEmail);
+      return { success: true };
+    }
+    case "archive": {
+      await archiveEmail(tokens, params.messageId);
+      return { success: true };
+    }
+    case "markRead": {
+      await markAsRead(tokens, params.messageId);
+      return { success: true };
+    }
+    case "listFilters": {
+      const filters = await listActiveFilters(tokens);
+      return { filters };
+    }
+    case "previewArchiveFilter": {
+      return await previewArchiveFilterForEmail(tokens, params.messageId);
+    }
+    case "upsertArchiveFilter": {
+      return await upsertArchiveFilterForEmail(
+        tokens,
+        params.messageId,
+        params.matchStrategy,
+        params.existingFilterId
+      );
+    }
+    case "blockSender": {
+      return await blockSender(tokens, params.messageId);
+    }
+    case "search": {
+      const emails = await searchEmails(tokens, params.query, params.maxResults || 10);
+      return { emails };
+    }
+    case "findContact": {
+      const contacts = await findContact(tokens, params.name);
+      return { contacts };
+    }
+    case "compose": {
+      const userEmail = await getUserEmail(tokens);
+      await sendNewEmail(tokens, params.to, params.subject, params.body, userEmail);
+      return { success: true };
+    }
+    case "calendarList": {
+      const events = await listCalendarEvents(tokens, {
+        startTime: params.startTime,
+        endTime: params.endTime,
+        maxResults: params.maxResults || 100,
+        query: params.query,
+      });
+      return { events };
+    }
+    case "calendarSetup": {
+      const profile = await inferCalendarProfile(tokens);
+      try {
+        const email = await getUserEmail(tokens);
+        if (email) {
+          await updateUserProfile(email, {
+            workAddress: profile.workAddress?.value ?? null,
+            homeAddress: profile.homeAddress?.value ?? null,
+            conferenceLink: profile.zoomLink?.value ?? null,
+          });
+        }
+      } catch (e) {
+        debugLog("error", "calendarSetup: failed to persist profile", e);
+      }
+      return { profile };
+    }
+    case "calendarUpdate": {
+      const event = await updateCalendarEvent(tokens, {
+        eventId: params.eventId,
+        title: params.title,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        timeZone: params.timeZone,
+        attendeeEmails: params.attendeeEmails,
+        notes: params.notes,
+        location: params.location,
+      });
+      return { event };
+    }
+    case "calendarDelete": {
+      await deleteCalendarEvent(tokens, params.eventId, params.sendUpdates || "all");
+      return { success: true };
+    }
+    case "calendarCreate": {
+      return await createCalendarInvite(tokens, {
+        title: params.title,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        timeZone: params.timeZone,
+        attendeeEmails: params.attendeeEmails,
+        notes: params.notes,
+        customLocation: params.customLocation,
+        locationPreference: params.locationPreference,
+        inferredProfile: params.inferredProfile,
+      });
+    }
+    case "getProfile": {
+      const email = await getUserEmail(tokens);
+      const user = await getUserByEmail(email);
+      return {
+        email,
+        homeAddress: user?.home_address || null,
+        workAddress: user?.work_address || null,
+        phoneNumber: user?.phone_number || null,
+        conferenceLink: user?.conference_link || null,
+      };
+    }
+    case "updateProfile": {
+      const email = await getUserEmail(tokens);
+      await updateUserProfile(email, {
+        homeAddress: params.homeAddress,
+        workAddress: params.workAddress,
+        phoneNumber: params.phoneNumber,
+        conferenceLink: params.conferenceLink,
+      });
+      return { success: true };
+    }
+    case "getMemories": {
+      const email = await getUserEmail(tokens);
+      const content = await getUserMemories(email);
+      return { memories: content };
+    }
+    case "saveMemories": {
+      const email = await getUserEmail(tokens);
+      await saveUserMemories(email, params.content);
+      return { success: true };
+    }
+    default:
+      return null;
   }
 }
 
@@ -52,161 +210,17 @@ export async function POST(request: NextRequest) {
   debugLog("api", `POST /api/gmail — action=${action}`, params);
   const startMs = Date.now();
 
-  function respond(data: any, status = 200) {
-    const elapsed = Date.now() - startMs;
-    debugLog("api", `POST /api/gmail — action=${action} DONE [${elapsed}ms]`, data);
-    return NextResponse.json(data, { status });
-  }
-
   try {
-    switch (action) {
-      case "list": {
-        const emails = await getUnreadEmails(tokens, params.maxResults || 10);
-        const userEmail = await getUserEmail(tokens);
-        const actionable = emails.filter(
-          (e) => !e.from.toLowerCase().includes(userEmail.toLowerCase())
-        );
-        debugLog("api", `list: ${emails.length} total, ${actionable.length} actionable`);
-        return respond({ emails: actionable });
-      }
-      case "read": {
-        const body = await getEmailBody(tokens, params.messageId);
-        debugLog("api", `read: body length=${body?.length || 0}`);
-        return respond({ body });
-      }
-      case "readThread": {
-        const messages = await getThreadMessages(
-          tokens,
-          params.threadId,
-          params.maxMessages || 5
-        );
-        debugLog("api", `readThread: ${messages.length} messages`);
-        return respond({ messages });
-      }
-      case "reply": {
-        const userEmail = await getUserEmail(tokens);
-        await sendReply(
-          tokens,
-          params.messageId,
-          params.threadId,
-          params.body,
-          userEmail
-        );
-        return respond({ success: true });
-      }
-      case "archive": {
-        await archiveEmail(tokens, params.messageId);
-        return respond({ success: true });
-      }
-      case "markRead": {
-        await markAsRead(tokens, params.messageId);
-        return respond({ success: true });
-      }
-      case "listFilters": {
-        const filters = await listActiveFilters(tokens);
-        debugLog("api", `listFilters: ${filters.length} filters`);
-        return respond({ filters });
-      }
-      case "previewArchiveFilter": {
-        const preview = await previewArchiveFilterForEmail(
-          tokens,
-          params.messageId
-        );
-        return respond(preview);
-      }
-      case "upsertArchiveFilter": {
-        const result = await upsertArchiveFilterForEmail(
-          tokens,
-          params.messageId,
-          params.matchStrategy,
-          params.existingFilterId
-        );
-        return respond(result);
-      }
-      case "blockSender": {
-        const result = await blockSender(tokens, params.messageId);
-        return NextResponse.json(result);
-      }
-      case "search": {
-        const emails = await searchEmails(tokens, params.query, params.maxResults || 10);
-        debugLog("api", `search: ${emails.length} results for query="${params.query}"`);
-        return respond({ emails });
-      }
-      case "findContact": {
-        const contacts = await findContact(tokens, params.name);
-        debugLog("api", `findContact: ${contacts.length} matches for "${params.name}"`);
-        return respond({ contacts });
-      }
-      case "compose": {
-        const userEmail = await getUserEmail(tokens);
-        await sendNewEmail(
-          tokens,
-          params.to,
-          params.subject,
-          params.body,
-          userEmail
-        );
-        return respond({ success: true });
-      }
-      case "calendarList": {
-        debugLog("calendar", "calendarList request", { startTime: params.startTime, endTime: params.endTime, query: params.query });
-        const events = await listCalendarEvents(tokens, {
-          startTime: params.startTime,
-          endTime: params.endTime,
-          maxResults: params.maxResults || 100,
-          query: params.query,
-        });
-        debugLog("calendar", `calendarList: ${events.length} events`, events);
-        return respond({ events });
-      }
-      case "calendarSetup": {
-        debugLog("calendar", "calendarSetup: inferring profile from past events...");
-        const profile = await inferCalendarProfile(tokens);
-        debugLog("calendar", "calendarSetup: profile inferred", profile);
-        return respond({ profile });
-      }
-      case "calendarUpdate": {
-        const event = await updateCalendarEvent(tokens, {
-          eventId: params.eventId,
-          title: params.title,
-          startTime: params.startTime,
-          endTime: params.endTime,
-          timeZone: params.timeZone,
-          attendeeEmails: params.attendeeEmails,
-          notes: params.notes,
-          location: params.location,
-        });
-        return NextResponse.json({ event });
-      }
-      case "calendarDelete": {
-        debugLog("calendar", "calendarDelete request", { eventId: params.eventId });
-        await deleteCalendarEvent(tokens, params.eventId, params.sendUpdates || "all");
-        debugLog("calendar", "calendarDelete: done");
-        return respond({ success: true });
-      }
-      case "calendarCreate": {
-        debugLog("calendar", "calendarCreate request", params);
-        const created = await createCalendarInvite(tokens, {
-          title: params.title,
-          startTime: params.startTime,
-          endTime: params.endTime,
-          timeZone: params.timeZone,
-          attendeeEmails: params.attendeeEmails,
-          notes: params.notes,
-          customLocation: params.customLocation,
-          locationPreference: params.locationPreference,
-          inferredProfile: params.inferredProfile,
-        });
-        debugLog("calendar", "calendarCreate: event created", created);
-        return respond(created);
-      }
-      default:
-        debugLog("error", `Unknown action: ${action}`);
-        return NextResponse.json(
-          { error: `Unknown action: ${action}` },
-          { status: 400 }
-        );
+    const result = await handleAction(action, params, tokens);
+    const elapsed = Date.now() - startMs;
+
+    if (result === null) {
+      debugLog("error", `Unknown action: ${action}`);
+      return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
     }
+
+    debugLog("api", `POST /api/gmail — action=${action} DONE [${elapsed}ms]`, result);
+    return NextResponse.json(result);
   } catch (error: any) {
     const elapsed = Date.now() - startMs;
     if (error instanceof GmailScopeError) {
