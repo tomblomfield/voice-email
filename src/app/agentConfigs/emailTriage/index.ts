@@ -94,12 +94,14 @@ NEVER invent, guess, or assume any email content. You MUST call get_email_count 
 
 # Calendar
 - If the user asks about their calendar, use list_calendar_events.
+- To search for a specific meeting or person (e.g. "Am I meeting with Natasha?"), use list_calendar_events with the query parameter. You can combine query with a time range to narrow results.
 - Before the first calendar-related task in a session, call run_calendar_setup. This is the setup phase. It scans past calendar invites and tries to infer the user's home address, work address, and Zoom link for this runtime only.
 - When you describe the setup results, make clear these are inferred from past invites, not stored facts.
 - If the user asks "what's my home address", "what's my work address", or "what's my Zoom link", call run_calendar_setup and answer from the results.
 - When the user wants to schedule or send a calendar invite, confirm the title, date, start time, end time, attendees, and location before using create_calendar_invite.
 - If the user says "at home", "at my office", "at work", or "on Zoom", use create_calendar_invite with the matching location_preference.
 - When the user wants to edit or update an existing calendar event, use list_calendar_events to find it first, then use edit_calendar_event with only the fields that need to change.
+- When the user wants to delete or cancel a calendar event, use list_calendar_events to find it first, then ALWAYS confirm with the user before calling delete_calendar_event. Tell them whether attendees will be notified.
 - Never invent a home address, work address, or Zoom link. If setup cannot infer one confidently enough, tell the user and ask for a custom location instead.
 
 # Filters
@@ -534,7 +536,7 @@ You decide the order — use your judgment. The user trusts you to surface the i
       tool({
         name: "list_calendar_events",
         description:
-          "List Google Calendar events in a time range. Use this when the user asks what is on their calendar today, tomorrow, this afternoon, or during any specific window.",
+          "List Google Calendar events in a time range, or search for events by keyword. Use this when the user asks what is on their calendar today, tomorrow, this afternoon, or during any specific window. Also use this when the user asks about a specific person or meeting (e.g. 'Am I meeting with Natasha?') by passing a query.",
         parameters: {
           type: "object",
           properties: {
@@ -548,11 +550,11 @@ You decide the order — use your judgment. The user trusts you to surface the i
             },
             query: {
               type: "string",
-              description: "Optional Google Calendar search query.",
+              description: "Optional Google Calendar search query. Use this to find events by name, person, or keyword (e.g. 'Natasha', 'team standup').",
             },
             max_results: {
               type: "number",
-              description: "Maximum number of events to return. Defaults to 10.",
+              description: "Maximum number of events to return. Defaults to 100. Pass a higher number only if needed.",
             },
           },
           required: [],
@@ -565,7 +567,7 @@ You decide the order — use your judgment. The user trusts you to surface the i
             startTime: args.start_time,
             endTime: args.end_time,
             query: args.query,
-            maxResults: args.max_results || 10,
+            maxResults: args.max_results || 100,
           });
           if (data.error) { debugLogClient("error", "list_calendar_events: failed", data.error); return { error: data.error }; }
           const result = {
@@ -751,6 +753,38 @@ You decide the order — use your judgment. The user trusts you to surface the i
             event: data.event,
             message: "Calendar event updated.",
           };
+        },
+      }),
+
+      tool({
+        name: "delete_calendar_event",
+        description:
+          "Delete a Google Calendar event. Use list_calendar_events first to find the event ID. ALWAYS confirm with the user before deleting.",
+        parameters: {
+          type: "object",
+          properties: {
+            event_id: {
+              type: "string",
+              description: "The ID of the calendar event to delete.",
+            },
+            notify_attendees: {
+              type: "boolean",
+              description: "Whether to send cancellation emails to attendees. Defaults to true.",
+            },
+          },
+          required: ["event_id"],
+          additionalProperties: false,
+        },
+        execute: async (args: any) => {
+          debugLogClient("tool", "delete_calendar_event: executing", args);
+          const data = await gmailApi({
+            action: "calendarDelete",
+            eventId: args.event_id,
+            sendUpdates: args.notify_attendees === false ? "none" : "all",
+          });
+          if (data.error) { debugLogClient("error", "delete_calendar_event: failed", data.error); return { error: data.error }; }
+          debugLogClient("tool", "delete_calendar_event: success");
+          return { success: true, message: "Calendar event deleted." };
         },
       }),
 

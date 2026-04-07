@@ -1,14 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  createCalendarInvite,
-  updateCalendarEvent,
   hasRequiredGoogleScopes,
-  inferCalendarProfile,
   getUnreadEmails,
   getEmailBody,
   getThreadMessages,
   getUserEmail,
-  listCalendarEvents,
   searchEmails,
   findContact,
   sendNewEmail,
@@ -22,6 +18,13 @@ import {
   upsertArchiveFilterForEmail,
   blockSender,
 } from "@/app/lib/gmail";
+import {
+  createCalendarInvite,
+  deleteCalendarEvent,
+  updateCalendarEvent,
+  inferCalendarProfile,
+  listCalendarEvents,
+} from "@/app/lib/calendar-api";
 import { debugLog } from "@/app/lib/debugLog";
 
 function getTokens(request: NextRequest) {
@@ -150,7 +153,7 @@ export async function POST(request: NextRequest) {
         const events = await listCalendarEvents(tokens, {
           startTime: params.startTime,
           endTime: params.endTime,
-          maxResults: params.maxResults || 10,
+          maxResults: params.maxResults || 100,
           query: params.query,
         });
         debugLog("calendar", `calendarList: ${events.length} events`, events);
@@ -174,6 +177,12 @@ export async function POST(request: NextRequest) {
           location: params.location,
         });
         return NextResponse.json({ event });
+      }
+      case "calendarDelete": {
+        debugLog("calendar", "calendarDelete request", { eventId: params.eventId });
+        await deleteCalendarEvent(tokens, params.eventId, params.sendUpdates || "all");
+        debugLog("calendar", "calendarDelete: done");
+        return respond({ success: true });
       }
       case "calendarCreate": {
         debugLog("calendar", "calendarCreate request", params);

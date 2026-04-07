@@ -1,5 +1,9 @@
 # Voicemail AI
 
+**[Try it live](https://voice-email-production.up.railway.app)** — connect your Gmail and triage your inbox by voice in under 60 seconds.
+
+---
+
 Hands-free email and calendar for your commute. Uses OpenAI's Realtime API for voice interaction plus Google APIs to triage email, check your calendar, infer invite defaults, and send invitations by voice.
 
 Open Voicemail AI on your phone, tap **Start**, and your AI assistant walks through your unread emails one by one. No screen needed.
@@ -21,8 +25,8 @@ Open Voicemail AI on your phone, tap **Start**, and your AI assistant walks thro
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/tomblomfield/voice-email.git
-cd voice-email
+git clone https://github.com/tomblomfield/voicemail.git
+cd voicemail
 npm install
 ```
 
@@ -66,8 +70,10 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
    - **Reply** — Tell the AI what to say, it drafts and reads it back for confirmation before sending
    - **Skip** — Marks as read, moves to next
    - **Archive** — Removes from inbox, moves to next
-4. **Ask about your calendar** — For example: "What's on my calendar this afternoon?" or "Set up a Zoom with Sarah tomorrow at 3."
-5. **Tap Stop** when you're done.
+   - **Block** — Say "block this sender" to auto-trash all future emails from them
+4. **Manage filters** — Ask the AI to auto-archive emails like the current one. It will suggest a filter strategy (by sender, or by sender + subject) and confirm before creating it.
+5. **Ask about your calendar** — For example: "What's on my calendar this afternoon?", "Am I meeting with Sarah?", or "Set up a Zoom with Sarah tomorrow at 3."
+6. **Tap Stop** when you're done.
 
 ## Tech stack
 

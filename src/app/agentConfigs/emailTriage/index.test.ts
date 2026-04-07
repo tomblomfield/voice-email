@@ -39,6 +39,8 @@ function makeDeps(emails: EmailData[] = []) {
         else if (action === "block") state.actions.blocked++;
       },
       getActionSummary: () => ({ ...state.actions }),
+      calendarProfile: () => null,
+      setCalendarProfile: () => {},
     } satisfies EmailTriageDeps,
   };
 }

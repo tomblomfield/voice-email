@@ -1,11 +1,5 @@
-import { google } from "googleapis";
 import crypto from "crypto";
-import {
-  inferCalendarProfile as inferCalendarProfileFromEvents,
-  resolveCalendarInviteDetails,
-  type CalendarInferenceEvent,
-  type InferredCalendarProfile,
-} from "@/app/lib/calendar";
+import { getOAuth2Client, getGmailClient } from "@/app/lib/google-auth";
 
 const REQUIRED_GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
@@ -97,14 +91,6 @@ function getEncryptionKey(): string {
   return key;
 }
 
-function getOAuth2Client() {
-  return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
-  );
-}
-
 export function getAuthUrl(): string {
   return getOAuth2Client().generateAuthUrl({
     access_type: "offline",
@@ -162,20 +148,6 @@ export function getMissingScopes(
   );
 
   return requiredScopes.filter((scope) => !grantedScopes.has(scope));
-}
-
-function getAuthedClient(tokens: any) {
-  const client = getOAuth2Client();
-  client.setCredentials(tokens);
-  return client;
-}
-
-function getGmail(tokens: any) {
-  return google.gmail({ version: "v1", auth: getAuthedClient(tokens) });
-}
-
-function getCalendar(tokens: any) {
-  return google.calendar({ version: "v3", auth: getAuthedClient(tokens) });
 }
 
 function requireScopes(tokens: any, requiredScopes: readonly string[]) {
@@ -353,7 +325,7 @@ async function getEmailMetadata(
   tokens: any,
   messageId: string
 ): Promise<{ from: string; fromName: string; fromEmail: string; subject: string }> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const detail = await gmail.users.messages.get({
     userId: "me",
     id: messageId,
@@ -393,13 +365,14 @@ export function shouldAddVoicemailFooter(userEmail: string): boolean {
   return FOOTER_ELIGIBLE_SENDERS.has(normalizeEmailAddress(userEmail));
 }
 
+// TODO: Update this to the real prod domain when we change it
+const PROD_URL = "https://voice-email-production.up.railway.app";
+
 export function getVoicemailSiteUrl(): string {
   const candidates = [
     process.env.VOICEMAIL_SITE_URL,
     process.env.NEXT_PUBLIC_APP_URL,
     process.env.APP_URL,
-    process.env.RAILWAY_PUBLIC_DOMAIN,
-    process.env.RAILWAY_STATIC_URL,
   ];
 
   for (const candidate of candidates) {
@@ -408,7 +381,7 @@ export function getVoicemailSiteUrl(): string {
     if (url) return url;
   }
 
-  return "https://railway.app";
+  return PROD_URL;
 }
 
 export function appendVoicemailFooter(body: string, userEmail: string): string {
@@ -423,50 +396,9 @@ export function appendVoicemailFooter(body: string, userEmail: string): string {
 }
 
 export async function getUserEmail(tokens: any): Promise<string> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const profile = await gmail.users.getProfile({ userId: "me" });
   return profile.data.emailAddress || "";
-}
-
-export interface CalendarEventSummary {
-  id: string;
-  summary: string;
-  description: string;
-  start: string;
-  end: string;
-  location: string;
-  attendees: string[];
-  htmlLink: string;
-}
-
-export interface CalendarListOptions {
-  startTime?: string;
-  endTime?: string;
-  maxResults?: number;
-  query?: string;
-}
-
-export interface UpdateCalendarEventInput {
-  eventId: string;
-  title?: string;
-  startTime?: string;
-  endTime?: string;
-  timeZone?: string;
-  attendeeEmails?: string[];
-  notes?: string;
-  location?: string;
-}
-
-export interface CreateCalendarInviteInput {
-  title: string;
-  startTime: string;
-  endTime: string;
-  timeZone?: string;
-  attendeeEmails?: string[];
-  notes?: string;
-  customLocation?: string;
-  locationPreference?: "home" | "work" | "zoom" | "custom" | "none";
-  inferredProfile?: InferredCalendarProfile | null;
 }
 
 export interface EmailSummary {
@@ -484,7 +416,7 @@ export async function getUnreadEmails(
   tokens: any,
   maxResults = 10
 ): Promise<EmailSummary[]> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const res = await gmail.users.messages.list({
     userId: "me",
     q: "is:unread in:inbox",
@@ -549,7 +481,7 @@ export async function getEmailBody(
   tokens: any,
   messageId: string
 ): Promise<string> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const res = await gmail.users.messages.get({
     userId: "me",
     id: messageId,
@@ -587,7 +519,7 @@ export async function getThreadMessages(
   threadId: string,
   maxMessages = 5
 ): Promise<{ from: string; date: string; body: string }[]> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const thread = await gmail.users.threads.get({
     userId: "me",
     id: threadId,
@@ -640,7 +572,7 @@ export async function sendReply(
   body: string,
   userEmail: string
 ): Promise<void> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
 
   const original = await gmail.users.messages.get({
     userId: "me",
@@ -682,7 +614,7 @@ export async function archiveEmail(
   tokens: any,
   messageId: string
 ): Promise<void> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   await gmail.users.messages.modify({
     userId: "me",
     id: messageId,
@@ -694,7 +626,7 @@ export async function markAsRead(
   tokens: any,
   messageId: string
 ): Promise<void> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   await gmail.users.messages.modify({
     userId: "me",
     id: messageId,
@@ -705,7 +637,7 @@ export async function markAsRead(
 export async function listActiveFilters(
   tokens: any
 ): Promise<GmailFilterSummary[]> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const res = await gmail.users.settings.filters.list({ userId: "me" });
 
   return (res.data.filter || [])
@@ -775,7 +707,7 @@ export async function upsertArchiveFilterForEmail(
 }> {
   requireScopes(tokens, [GMAIL_FILTER_WRITE_SCOPE]);
 
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const preview = await previewArchiveFilterForEmail(tokens, messageId);
   const actualMatchStrategy =
     matchStrategy === "fromAndSubject" && !preview.message.subject
@@ -854,7 +786,7 @@ export async function blockSender(
 }> {
   requireScopes(tokens, [GMAIL_FILTER_WRITE_SCOPE]);
 
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const message = await getEmailMetadata(tokens, messageId);
 
   // Create a filter that auto-deletes all future emails from this sender
@@ -884,7 +816,7 @@ export async function searchEmails(
   query: string,
   maxResults = 10
 ): Promise<EmailSummary[]> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const res = await gmail.users.messages.list({
     userId: "me",
     q: query,
@@ -926,7 +858,7 @@ export async function findContact(
   tokens: any,
   name: string
 ): Promise<{ name: string; email: string }[]> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   // Search for recent emails involving this person
   const res = await gmail.users.messages.list({
     userId: "me",
@@ -993,7 +925,7 @@ export async function sendNewEmail(
   body: string,
   userEmail: string
 ): Promise<void> {
-  const gmail = getGmail(tokens);
+  const gmail = getGmailClient(tokens);
   const bodyWithFooter = appendVoicemailFooter(body, userEmail);
 
   const raw = [
@@ -1012,164 +944,4 @@ export async function sendNewEmail(
   });
 }
 
-function formatEventDateTime(dateTime?: string | null, date?: string | null): string {
-  if (dateTime) return dateTime;
-  if (date) return `${date}T00:00:00`;
-  return "";
-}
 
-function mapCalendarEvent(event: any): CalendarEventSummary {
-  return {
-    id: event.id || "",
-    summary: event.summary || "(untitled)",
-    description: event.description || "",
-    start: formatEventDateTime(event.start?.dateTime, event.start?.date),
-    end: formatEventDateTime(event.end?.dateTime, event.end?.date),
-    location: event.location || "",
-    attendees: (event.attendees || [])
-      .map((attendee: any) => attendee.email)
-      .filter(Boolean),
-    htmlLink: event.htmlLink || "",
-  };
-}
-
-export async function listCalendarEvents(
-  tokens: any,
-  options: CalendarListOptions = {}
-): Promise<CalendarEventSummary[]> {
-  const calendar = getCalendar(tokens);
-  const now = new Date();
-  const defaultEnd = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const response = await calendar.events.list({
-    calendarId: "primary",
-    singleEvents: true,
-    orderBy: "startTime",
-    timeMin: options.startTime || now.toISOString(),
-    timeMax: options.endTime || defaultEnd.toISOString(),
-    maxResults: options.maxResults || 10,
-    q: options.query || undefined,
-  });
-
-  return (response.data.items || []).map(mapCalendarEvent);
-}
-
-export async function inferCalendarProfile(
-  tokens: any
-): Promise<InferredCalendarProfile> {
-  const calendar = getCalendar(tokens);
-  const now = new Date();
-  const timeMax = now.toISOString();
-  const timeMin = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000).toISOString();
-  const response = await calendar.events.list({
-    calendarId: "primary",
-    singleEvents: true,
-    orderBy: "startTime",
-    timeMin,
-    timeMax,
-    maxResults: 250,
-  });
-
-  const events: CalendarInferenceEvent[] = (response.data.items || []).map((event: any) => ({
-    summary: event.summary,
-    description: event.description,
-    location: event.location,
-    start: formatEventDateTime(event.start?.dateTime, event.start?.date),
-    attendeeCount: event.attendees?.length || 0,
-    conferenceUrls: (event.conferenceData?.entryPoints || [])
-      .map((entryPoint: any) => entryPoint.uri)
-      .filter(Boolean),
-  }));
-
-  return inferCalendarProfileFromEvents(events);
-}
-
-async function getPrimaryCalendarTimeZone(tokens: any): Promise<string | undefined> {
-  const calendar = getCalendar(tokens);
-  const response = await calendar.calendarList.get({ calendarId: "primary" });
-  return response.data.timeZone || undefined;
-}
-
-export async function createCalendarInvite(
-  tokens: any,
-  input: CreateCalendarInviteInput
-): Promise<{
-  event: CalendarEventSummary;
-  usedProfileFields: string[];
-}> {
-  const resolved = resolveCalendarInviteDetails({
-    notes: input.notes,
-    customLocation: input.customLocation,
-    locationPreference: input.locationPreference,
-    inferredProfile: input.inferredProfile,
-  });
-
-  if (resolved.error) {
-    throw new Error(resolved.error);
-  }
-
-  const attendeeEmails = Array.from(
-    new Set((input.attendeeEmails || []).map((email) => email.trim().toLowerCase()).filter(Boolean))
-  );
-  const timeZone = input.timeZone || (await getPrimaryCalendarTimeZone(tokens));
-  const usedProfileFields: string[] = [];
-  if (input.locationPreference === "home") usedProfileFields.push("homeAddress");
-  if (input.locationPreference === "work") usedProfileFields.push("workAddress");
-  if (input.locationPreference === "zoom") usedProfileFields.push("zoomLink");
-
-  const calendar = getCalendar(tokens);
-  const response = await calendar.events.insert({
-    calendarId: "primary",
-    sendUpdates: attendeeEmails.length > 0 ? "all" : "none",
-    requestBody: {
-      summary: input.title,
-      description: resolved.description,
-      location: resolved.location,
-      start: {
-        dateTime: input.startTime,
-        timeZone,
-      },
-      end: {
-        dateTime: input.endTime,
-        timeZone,
-      },
-      attendees: attendeeEmails.map((email) => ({ email })),
-    },
-  });
-
-  return {
-    event: mapCalendarEvent(response.data),
-    usedProfileFields,
-  };
-}
-
-export async function updateCalendarEvent(
-  tokens: any,
-  input: UpdateCalendarEventInput
-): Promise<CalendarEventSummary> {
-  const calendar = getCalendar(tokens);
-  const timeZone = input.timeZone || (await getPrimaryCalendarTimeZone(tokens));
-
-  const requestBody: any = {};
-  if (input.title !== undefined) requestBody.summary = input.title;
-  if (input.notes !== undefined) requestBody.description = input.notes;
-  if (input.location !== undefined) requestBody.location = input.location;
-  if (input.startTime !== undefined) {
-    requestBody.start = { dateTime: input.startTime, timeZone };
-  }
-  if (input.endTime !== undefined) {
-    requestBody.end = { dateTime: input.endTime, timeZone };
-  }
-  if (input.attendeeEmails !== undefined) {
-    requestBody.attendees = input.attendeeEmails.map((email) => ({ email }));
-  }
-
-  const hasAttendees = input.attendeeEmails && input.attendeeEmails.length > 0;
-  const response = await calendar.events.patch({
-    calendarId: "primary",
-    eventId: input.eventId,
-    sendUpdates: hasAttendees ? "all" : "none",
-    requestBody,
-  });
-
-  return mapCalendarEvent(response.data);
-}

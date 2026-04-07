@@ -14,8 +14,6 @@ const FOOTER_ENV_KEYS = [
   "VOICEMAIL_SITE_URL",
   "NEXT_PUBLIC_APP_URL",
   "APP_URL",
-  "RAILWAY_PUBLIC_DOMAIN",
-  "RAILWAY_STATIC_URL",
 ] as const;
 
 let originalFooterEnv: Record<string, string | undefined>;
@@ -193,9 +191,7 @@ describe("voicemail footer", () => {
     );
   });
 
-  it("uses the Railway public domain when no explicit URL is configured", () => {
-    process.env.RAILWAY_PUBLIC_DOMAIN = "voice-email-production.up.railway.app";
-
+  it("falls back to the production URL when no env var is configured", () => {
     expect(appendVoicemailFooter("Checking in", "tb@ycombinator.com")).toBe(
       "Checking in\n\nsent with voicemail\nhttps://voice-email-production.up.railway.app"
     );
@@ -209,3 +205,4 @@ describe("voicemail footer", () => {
     ).toBe("No footer here");
   });
 });
+
