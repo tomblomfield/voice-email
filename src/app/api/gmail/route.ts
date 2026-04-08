@@ -18,6 +18,7 @@ import {
   upsertArchiveFilterForEmail,
   blockSender,
 } from "@/app/lib/gmail";
+import { getUnsubscribeInfo, performUnsubscribe } from "@/app/lib/unsubscribe";
 import {
   createCalendarInvite,
   deleteCalendarEvent,
@@ -91,6 +92,12 @@ async function handleAction(action: string, params: any, tokens: any): Promise<a
     }
     case "blockSender": {
       return await blockSender(tokens, params.messageId);
+    }
+    case "unsubscribeInfo": {
+      return await getUnsubscribeInfo(tokens, params.messageId);
+    }
+    case "unsubscribe": {
+      return await performUnsubscribe(tokens, params.messageId);
     }
     case "search": {
       const emails = await searchEmails(tokens, params.query, params.maxResults || 10);

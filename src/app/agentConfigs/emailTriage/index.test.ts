@@ -23,7 +23,7 @@ function makeDeps(emails: EmailData[] = []) {
   const state = {
     emails: [...emails],
     idx: 0,
-    actions: { replied: 0, skipped: 0, archived: 0, blocked: 0 },
+    actions: { replied: 0, skipped: 0, archived: 0, blocked: 0, unsubscribed: 0 },
   };
   return {
     state,
@@ -32,11 +32,12 @@ function makeDeps(emails: EmailData[] = []) {
       setEmails: (e: EmailData[]) => { state.emails = e; },
       emailIndex: () => state.idx,
       advanceIndex: () => { state.idx++; },
-      recordAction: (action: "reply" | "skip" | "archive" | "block") => {
+      recordAction: (action: "reply" | "skip" | "archive" | "block" | "unsubscribe") => {
         if (action === "reply") state.actions.replied++;
         else if (action === "skip") state.actions.skipped++;
         else if (action === "archive") state.actions.archived++;
         else if (action === "block") state.actions.blocked++;
+        else if (action === "unsubscribe") state.actions.unsubscribed++;
       },
       getActionSummary: () => ({ ...state.actions }),
       calendarProfile: () => null,

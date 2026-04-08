@@ -32,8 +32,8 @@ export interface EmailTriageDeps {
   setEmails: (emails: EmailData[]) => void;
   emailIndex: () => number;
   advanceIndex: () => void;
-  recordAction: (action: "reply" | "skip" | "archive" | "block") => void;
-  getActionSummary: () => { replied: number; skipped: number; archived: number; blocked: number };
+  recordAction: (action: "reply" | "skip" | "archive" | "block" | "unsubscribe") => void;
+  getActionSummary: () => { replied: number; skipped: number; archived: number; blocked: number; unsubscribed: number };
   calendarProfile: () => InferredCalendarProfile | null;
   setCalendarProfile: (profile: InferredCalendarProfile) => void;
 }
@@ -83,9 +83,10 @@ NEVER invent, guess, or assume any email content. You MUST call get_email_count 
    - **Skip**: Call skip_email and move to the next one.
    - **Archive**: Call archive_email and move to the next one.
    - **Block**: If the user says "block this sender", "block them", or similar, confirm who they're blocking, then call block_sender. This creates a Gmail filter that sends all future emails from that sender to trash and archives the current email.
+   - **Unsubscribe**: If the user says "unsubscribe", "unsubscribe from this", "stop these emails", or similar, call unsubscribe_from_email. This automatically finds the unsubscribe mechanism (one-click, email, or browser automation) and handles it. Tell the user what method was used and whether it succeeded. The email is automatically archived after unsubscribing.
 5. After each action, automatically call get_next_email for the next one.
 6. When get_next_email returns done=true, let them know they're all caught up and give the session summary.
-7. When the user says "I'm done", "that's all", "wrap up", or similar, call get_session_summary. Announce it naturally: "All set. You replied to X, skipped Y, archived Z, and blocked W. You still have N left for later. Have a great day!"
+7. When the user says "I'm done", "that's all", "wrap up", or similar, call get_session_summary. Announce it naturally: "All set. You replied to X, skipped Y, archived Z, blocked W, and unsubscribed from U. You still have N left for later. Have a great day!"
 
 # Search & Compose
 - The user can ask to find old emails at any time (e.g., "Did Sarah send me that report?"). Use search_emails with Gmail search syntax.
@@ -228,7 +229,8 @@ You decide the order — use your judgment. The user trusts you to surface the i
                 skipped: summary.skipped,
                 archived: summary.archived,
                 blocked: summary.blocked,
-                total: summary.replied + summary.skipped + summary.archived + summary.blocked,
+                unsubscribed: summary.unsubscribed,
+                total: summary.replied + summary.skipped + summary.archived + summary.blocked + summary.unsubscribed,
               },
             };
           }
@@ -250,7 +252,8 @@ You decide the order — use your judgment. The user trusts you to surface the i
                   skipped: summary.skipped,
                   archived: summary.archived,
                   blocked: summary.blocked,
-                  total: summary.replied + summary.skipped + summary.archived + summary.blocked,
+                  unsubscribed: summary.unsubscribed,
+                  total: summary.replied + summary.skipped + summary.archived + summary.blocked + summary.unsubscribed,
                 },
               };
             }
@@ -397,6 +400,46 @@ You decide the order — use your judgment. The user trusts you to surface the i
             blockedEmail: data.blockedEmail,
             blockedName: data.blockedName,
             message: `Blocked ${data.blockedName || data.blockedEmail}. All future emails from them will go to trash.`,
+          };
+        },
+      }),
+
+      tool({
+        name: "unsubscribe_from_email",
+        description:
+          "Unsubscribe from a mailing list or newsletter. Automatically detects the best unsubscribe method (one-click, email, or browser automation) and handles it. The email is archived after unsubscribing. Call this when the user says 'unsubscribe', 'stop these emails', 'unsubscribe from this', or similar.",
+        parameters: {
+          type: "object",
+          properties: {
+            message_id: {
+              type: "string",
+              description: "The ID of the email to unsubscribe from",
+            },
+          },
+          required: ["message_id"],
+          additionalProperties: false,
+        },
+        execute: async (args: any) => {
+          debugLogClient("tool", "unsubscribe_from_email: executing", args);
+          const data = await gmailApi({
+            action: "unsubscribe",
+            messageId: args.message_id,
+          });
+          if (data.error) {
+            debugLogClient("error", "unsubscribe_from_email: failed", data.error);
+            return { error: data.error };
+          }
+          // Record the action if we confirmed success OR launched a browser agent
+          // (browser is fire-and-forget so success=false, but we still took action)
+          if (data.success || data.method === "browser") {
+            deps.recordAction("unsubscribe");
+          }
+          debugLogClient("tool", `unsubscribe_from_email: ${data.method} — success=${data.success}`, data);
+          return {
+            success: data.success,
+            method: data.method,
+            message: data.message,
+            browserTaskId: data.browserTaskId || null,
           };
         },
       }),
@@ -992,7 +1035,8 @@ You decide the order — use your judgment. The user trusts you to surface the i
             skipped: summary.skipped,
             archived: summary.archived,
             blocked: summary.blocked,
-            totalProcessed: summary.replied + summary.skipped + summary.archived + summary.blocked,
+            unsubscribed: summary.unsubscribed,
+            totalProcessed: summary.replied + summary.skipped + summary.archived + summary.blocked + summary.unsubscribed,
             remaining: Math.max(0, emails.length - idx),
           };
           try {

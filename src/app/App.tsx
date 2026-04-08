@@ -43,7 +43,7 @@ function App() {
   // Email state (populated by agent tools)
   const emailsRef = useRef<EmailData[]>([]);
   const emailIndexRef = useRef<number>(0);
-  const actionsRef = useRef({ replied: 0, skipped: 0, archived: 0, blocked: 0 });
+  const actionsRef = useRef({ replied: 0, skipped: 0, archived: 0, blocked: 0, unsubscribed: 0 });
   const calendarProfileRef = useRef<InferredCalendarProfile | null>(null);
 
   // Reconnection state
@@ -216,11 +216,11 @@ function App() {
       // Reset state
       emailsRef.current = [];
       emailIndexRef.current = 0;
-      actionsRef.current = { replied: 0, skipped: 0, archived: 0, blocked: 0 };
+      actionsRef.current = { replied: 0, skipped: 0, archived: 0, blocked: 0, unsubscribed: 0 };
       calendarProfileRef.current = null;
 
       // Create agent with deps — emails will be populated by get_email_count tool
-      const actionKeyMap = { reply: "replied", skip: "skipped", archive: "archived", block: "blocked" } as const;
+      const actionKeyMap = { reply: "replied", skip: "skipped", archive: "archived", block: "blocked", unsubscribe: "unsubscribed" } as const;
       const agent = createEmailTriageAgent({
         emails: () => emailsRef.current,
         setEmails: (emails) => { emailsRef.current = emails; },

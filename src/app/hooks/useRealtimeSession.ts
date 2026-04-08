@@ -152,7 +152,7 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
             return pc;
           },
         }),
-        model: 'gpt-4o-realtime-preview-2025-06-03',
+        model: 'gpt-realtime-1.5',
         config: {
           inputAudioTranscription: {
             model: 'gpt-4o-mini-transcribe',
@@ -162,7 +162,7 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
         context: extraContext ?? {},
       });
 
-      debugLogClient("event", "Connecting to OpenAI realtime...", { model: 'gpt-4o-realtime-preview-2025-06-03' });
+      debugLogClient("event", "Connecting to OpenAI realtime...", { model: 'gpt-realtime-1.5' });
       await sessionRef.current.connect({ apiKey: ek });
       debugLogClient("event", "Connected to OpenAI realtime ✓");
       updateStatus('CONNECTED');
