@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exchangeCode, encryptTokens } from "@/app/lib/gmail";
 
+function getRedirectUri(request: NextRequest): string {
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "localhost:3000";
+  const proto = request.headers.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
+  return `${proto}://${host}/api/auth/callback`;
+}
+
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
   if (!code) {
@@ -8,7 +14,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const tokens = await exchangeCode(code);
+    const redirectUri = getRedirectUri(request);
+    const tokens = await exchangeCode(code, redirectUri);
     const encrypted = encryptTokens(tokens);
 
     const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "";
