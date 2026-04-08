@@ -56,7 +56,9 @@ function App() {
   const isManualDisconnectRef = useRef(false);
   const maxReconnectAttempts = 5;
 
-  const { connect, disconnect, sendEvent } =
+  const [isMuted, setIsMuted] = useState(false);
+
+  const { connect, disconnect, sendEvent, mute } =
     useRealtimeSession({
       onConnectionChange: (s) => {
         if (
@@ -300,6 +302,13 @@ function App() {
     connectOptionsRef.current = null;
     disconnect();
     setSessionStatus("DISCONNECTED");
+    setIsMuted(false);
+  };
+
+  const toggleMute = () => {
+    const next = !isMuted;
+    setIsMuted(next);
+    mute(next);
   };
 
   const onToggleConnection = () => {
@@ -389,19 +398,50 @@ function App() {
         )}
       </div>
 
-      <button
-        onClick={onToggleConnection}
-        disabled={isConnecting}
-        className={`w-32 h-32 rounded-full flex items-center justify-center text-xl font-bold transition-all active:scale-95 mb-8 ${
-          isConnected
-            ? "bg-red-600 hover:bg-red-700 text-white"
-            : isConnecting
-            ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-            : "bg-white text-gray-950 hover:bg-gray-200"
-        }`}
-      >
-        {isConnected ? "Stop" : isConnecting ? "..." : "Start"}
-      </button>
+      <div className="relative mb-8 flex items-center justify-center">
+        <button
+          onClick={onToggleConnection}
+          disabled={isConnecting}
+          className={`w-32 h-32 rounded-full flex items-center justify-center text-xl font-bold transition-all active:scale-95 ${
+            isConnected
+              ? "bg-red-600 hover:bg-red-700 text-white"
+              : isConnecting
+              ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+              : "bg-white text-gray-950 hover:bg-gray-200"
+          }`}
+        >
+          {isConnected ? "Stop" : isConnecting ? "..." : "Start"}
+        </button>
+
+        {isConnected && (
+          <button
+            onClick={toggleMute}
+            className={`absolute -right-14 w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 ${
+              isMuted
+                ? "bg-amber-500 hover:bg-amber-600 text-white"
+                : "bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white"
+            }`}
+            title={isMuted ? "Unmute microphone" : "Mute microphone"}
+          >
+            {isMuted ? (
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                <line x1="1" y1="1" x2="23" y2="23" />
+                <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
+                <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2c0 .76-.13 1.49-.36 2.18" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            )}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
