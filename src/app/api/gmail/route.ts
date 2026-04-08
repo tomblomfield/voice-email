@@ -43,12 +43,12 @@ function getTokens(request: NextRequest) {
 async function handleAction(action: string, params: any, tokens: any): Promise<any> {
   switch (action) {
     case "list": {
-      const emails = await getUnreadEmails(tokens, params.maxResults || 10);
+      const result = await getUnreadEmails(tokens, params.maxResults || 10, params.pageToken);
       const userEmail = await getUserEmail(tokens);
-      const actionable = emails.filter(
+      const actionable = result.emails.filter(
         (e) => !e.from.toLowerCase().includes(userEmail.toLowerCase())
       );
-      return { emails: actionable };
+      return { emails: actionable, nextPageToken: result.nextPageToken };
     }
     case "read": {
       const body = await getEmailBody(tokens, params.messageId);
