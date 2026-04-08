@@ -413,16 +413,18 @@ export interface EmailSummary {
 
 export async function getUnreadEmails(
   tokens: any,
-  maxResults = 10
-): Promise<EmailSummary[]> {
+  maxResults = 10,
+  pageToken?: string
+): Promise<{ emails: EmailSummary[]; nextPageToken?: string }> {
   const gmail = getGmailClient(tokens);
   const res = await gmail.users.messages.list({
     userId: "me",
     q: "is:unread in:inbox",
     maxResults,
+    ...(pageToken ? { pageToken } : {}),
   });
 
-  if (!res.data.messages) return [];
+  if (!res.data.messages) return { emails: [], nextPageToken: undefined };
 
   const emails: EmailSummary[] = await Promise.all(
     res.data.messages.map(async (msg) => {
@@ -450,7 +452,7 @@ export async function getUnreadEmails(
     })
   );
 
-  return emails;
+  return { emails, nextPageToken: res.data.nextPageToken ?? undefined };
 }
 
 export function truncateToLatestMessage(body: string, maxLength = 2000): string {

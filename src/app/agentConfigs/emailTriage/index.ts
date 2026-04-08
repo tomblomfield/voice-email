@@ -31,11 +31,14 @@ export interface EmailTriageDeps {
   emails: () => EmailData[];
   setEmails: (emails: EmailData[]) => void;
   emailIndex: () => number;
+  setEmailIndex: (index: number) => void;
   advanceIndex: () => void;
   recordAction: (action: "reply" | "skip" | "archive" | "block" | "unsubscribe") => void;
   getActionSummary: () => { replied: number; skipped: number; archived: number; blocked: number; unsubscribed: number };
   calendarProfile: () => InferredCalendarProfile | null;
   setCalendarProfile: (profile: InferredCalendarProfile) => void;
+  nextPageToken: () => string | undefined;
+  setNextPageToken: (token: string | undefined) => void;
   dbAvailable: boolean;
 }
 
@@ -88,6 +91,8 @@ NEVER invent, guess, or assume any email content. You MUST call get_email_count 
 5. After each action, automatically call get_next_email for the next one.
 6. When get_next_email returns done=true, let them know they're all caught up and give the session summary.
 7. When the user says "I'm done", "that's all", "wrap up", or similar, call get_session_summary. Announce it naturally: "All set. You replied to X, skipped Y, archived Z, blocked W, and unsubscribed from U. You still have N left for later. Have a great day!"
+8. If the user asks to check for new emails or refresh their inbox, call reload_emails. This re-fetches the full unread list from Gmail and resets the queue.
+9. When you finish processing all loaded emails and there are more available (has_more_emails is true in the results), let the user know and offer to load the next batch. If they agree, call fetch_more_emails to load the next 50.
 
 # Search & Compose
 - The user can ask to find old emails at any time (e.g., "Did Sarah send me that report?"). Use search_emails with Gmail search syntax.
@@ -183,8 +188,11 @@ You decide the order — use your judgment. The user trusts you to surface the i
           }
           const emails = data.emails || [];
           deps.setEmails(emails);
+          deps.setEmailIndex(0);
+          deps.setNextPageToken(data.nextPageToken || undefined);
           const result = {
             count: emails.length,
+            has_more_emails: !!data.nextPageToken,
             emails: emails.map((e: any) => ({
               id: e.id,
               from: e.from,
@@ -195,7 +203,91 @@ You decide the order — use your judgment. The user trusts you to surface the i
               date: e.date,
             })),
           };
-          debugLogClient("tool", `get_email_count: ${emails.length} emails`, result);
+          debugLogClient("tool", `get_email_count: ${emails.length} emails, hasMore=${!!data.nextPageToken}`, result);
+          return result;
+        },
+      }),
+
+      tool({
+        name: "reload_emails",
+        description:
+          "Re-fetch the unread email list from Gmail. Use this when the user asks to check for new emails, refresh their inbox, or see if anything new has come in. Resets the email queue and starts from the top.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+        execute: async () => {
+          debugLogClient("tool", "reload_emails: executing");
+          const data = await gmailApi({ action: "list", maxResults: 50 });
+          if (data.error) {
+            debugLogClient("error", "reload_emails: failed", data.error);
+            return { error: data.error };
+          }
+          const emails = data.emails || [];
+          deps.setEmails(emails);
+          deps.setEmailIndex(0);
+          deps.setNextPageToken(data.nextPageToken || undefined);
+          const result = {
+            count: emails.length,
+            has_more_emails: !!data.nextPageToken,
+            emails: emails.map((e: any) => ({
+              id: e.id,
+              from: e.from,
+              to: e.to,
+              cc: e.cc,
+              subject: e.subject,
+              snippet: e.snippet,
+              date: e.date,
+            })),
+          };
+          debugLogClient("tool", `reload_emails: ${emails.length} emails, hasMore=${!!data.nextPageToken}`, result);
+          return result;
+        },
+      }),
+
+      tool({
+        name: "fetch_more_emails",
+        description:
+          "Fetch the next batch of unread emails beyond what's already loaded. Call this when you've finished processing the current batch and has_more_emails was true. Appends the new emails to the existing list.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+        execute: async () => {
+          debugLogClient("tool", "fetch_more_emails: executing");
+          const pageToken = deps.nextPageToken();
+          if (!pageToken) {
+            debugLogClient("tool", "fetch_more_emails: no more pages");
+            return { count: 0, has_more_emails: false, emails: [], message: "No more emails to load." };
+          }
+          const data = await gmailApi({ action: "list", maxResults: 50, pageToken });
+          if (data.error) {
+            debugLogClient("error", "fetch_more_emails: failed", data.error);
+            return { error: data.error };
+          }
+          const newEmails = data.emails || [];
+          const existingEmails = deps.emails();
+          deps.setEmails([...existingEmails, ...newEmails]);
+          deps.setNextPageToken(data.nextPageToken || undefined);
+          const result = {
+            count: newEmails.length,
+            total_loaded: existingEmails.length + newEmails.length,
+            has_more_emails: !!data.nextPageToken,
+            emails: newEmails.map((e: any) => ({
+              id: e.id,
+              from: e.from,
+              to: e.to,
+              cc: e.cc,
+              subject: e.subject,
+              snippet: e.snippet,
+              date: e.date,
+            })),
+          };
+          debugLogClient("tool", `fetch_more_emails: ${newEmails.length} new emails, total=${existingEmails.length + newEmails.length}, hasMore=${!!data.nextPageToken}`, result);
           return result;
         },
       }),

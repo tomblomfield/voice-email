@@ -45,6 +45,7 @@ function App() {
   const emailIndexRef = useRef<number>(0);
   const actionsRef = useRef({ replied: 0, skipped: 0, archived: 0, blocked: 0, unsubscribed: 0 });
   const calendarProfileRef = useRef<InferredCalendarProfile | null>(null);
+  const nextPageTokenRef = useRef<string | undefined>(undefined);
 
   // Reconnection state
   const connectOptionsRef = useRef<{
@@ -219,6 +220,7 @@ function App() {
       emailIndexRef.current = 0;
       actionsRef.current = { replied: 0, skipped: 0, archived: 0, blocked: 0, unsubscribed: 0 };
       calendarProfileRef.current = null;
+      nextPageTokenRef.current = undefined;
 
       const session = await fetchSessionData();
       if (!session) return;
@@ -229,6 +231,7 @@ function App() {
         emails: () => emailsRef.current,
         setEmails: (emails) => { emailsRef.current = emails; },
         emailIndex: () => emailIndexRef.current,
+        setEmailIndex: (index) => { emailIndexRef.current = index; },
         advanceIndex: () => { emailIndexRef.current += 1; },
         recordAction: (action) => {
           const key = actionKeyMap[action];
@@ -242,6 +245,8 @@ function App() {
         setCalendarProfile: (profile) => {
           calendarProfileRef.current = profile;
         },
+        nextPageToken: () => nextPageTokenRef.current,
+        setNextPageToken: (token) => { nextPageTokenRef.current = token; },
         dbAvailable: session.dbAvailable,
       });
 
