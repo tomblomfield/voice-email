@@ -91,16 +91,16 @@ function getEncryptionKey(): string {
   return key;
 }
 
-export function getAuthUrl(): string {
-  return getOAuth2Client().generateAuthUrl({
+export function getAuthUrl(redirectUri?: string): string {
+  return getOAuth2Client(redirectUri).generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: [...REQUIRED_GOOGLE_SCOPES],
   });
 }
 
-export async function exchangeCode(code: string) {
-  const client = getOAuth2Client();
+export async function exchangeCode(code: string, redirectUri?: string) {
+  const client = getOAuth2Client(redirectUri);
   const { tokens } = await client.getToken(code);
   return tokens;
 }
@@ -365,8 +365,7 @@ export function shouldAddVoicemailFooter(userEmail: string): boolean {
   return FOOTER_ELIGIBLE_SENDERS.has(normalizeEmailAddress(userEmail));
 }
 
-// TODO: Update this to the real prod domain when we change it
-const PROD_URL = "https://voice-email-production.up.railway.app";
+const PROD_URL = "https://voicemail.audio";
 
 export function getVoicemailSiteUrl(): string {
   const candidates = [
