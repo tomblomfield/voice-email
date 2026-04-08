@@ -9,6 +9,30 @@ cp /Users/tom/Code/voice-email/.env .
 Required vars: OPENAI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, SESSION_SECRET.
 See .env.example for details.
 
+## Starting the server
+
+Install dependencies if needed:
+
+```sh
+npm ci
+```
+
+Start the local dev server on port 3000:
+
+```sh
+npm run dev
+```
+
+If port 3000 is already in use, stop the existing listener first and then restart:
+
+```sh
+lsof -nP -iTCP:3000 -sTCP:LISTEN
+kill -9 <pid>
+npm run dev
+```
+
+The app should be available at http://localhost:3000.
+
 ## Deploying to Railway
 
 The app is hosted on Railway (project: `voice-email`, service: `voice-email`, environment: `production`).
