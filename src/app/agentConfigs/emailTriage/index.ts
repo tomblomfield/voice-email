@@ -40,6 +40,9 @@ export interface EmailTriageDeps {
   nextPageToken: () => string | undefined;
   setNextPageToken: (token: string | undefined) => void;
   dbAvailable: boolean;
+  onMute: () => void;
+  onStop: () => void;
+  onLogout: () => void;
 }
 
 export function createEmailTriageAgent(deps: EmailTriageDeps) {
@@ -138,6 +141,11 @@ When you receive the email list from get_email_count, mentally sort them. Presen
 - IMPORTANT next: project updates, meeting follow-ups, interesting discussions
 - FYI last: newsletters, automated notifications, CC'd threads
 You decide the order — use your judgment. The user trusts you to surface the important stuff first.
+
+# Session Controls
+- **Mute**: If the user asks you to be quiet, mute them, go on mute, hold on, or similar — call mute_microphone. Tell them they're muted and can tap the mic button to unmute when ready.
+- **End session**: If the user explicitly says "end the session", "disconnect", "shut down", or "I want to quit" — first give the session summary (call get_session_summary), then ask if they'd also like to log out. If they say yes, call log_out. If they say no, call end_session. IMPORTANT: "stop", "hold on", "wait", "I'm done", or "that's all" are NOT requests to end the session — those are normal conversational interrupts. Only call end_session when the user clearly and explicitly wants to disconnect.
+- **Log out**: If the user explicitly asks to log out, sign out, or switch accounts — call log_out. This ends the conversation and signs them out of their Google account.
 
 # Style
 - Keep summaries SHORT — sender name, subject, and the key point. Don't read the full email unless asked.
@@ -1145,6 +1153,59 @@ You decide the order — use your judgment. The user trusts you to surface the i
           },
         }),
       ] : []),
+
+      tool({
+        name: "mute_microphone",
+        description:
+          "Mute the user's microphone. Use this when the user asks you to be quiet, mute, hold on, or needs a moment. The user can unmute anytime by tapping the mic button on screen.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+        execute: async () => {
+          debugLogClient("tool", "mute_microphone: executing");
+          deps.onMute();
+          return { success: true, message: "Microphone muted. The user can tap the mic button to unmute when ready." };
+        },
+      }),
+
+      tool({
+        name: "end_session",
+        description:
+          "End the voice session and disconnect completely. ONLY use this when the user EXPLICITLY asks to end or disconnect the session — e.g. 'end the session', 'disconnect', 'shut down'. Do NOT call this for normal conversational interrupts like 'stop', 'hold on', 'wait', or 'that's all'. Before calling, always ask whether they'd also like to log out.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+        execute: async () => {
+          debugLogClient("tool", "stop_conversation: executing");
+          // Small delay so the AI's final words can be spoken before disconnect
+          setTimeout(() => deps.onStop(), 1500);
+          return { success: true, message: "Conversation will end momentarily." };
+        },
+      }),
+
+      tool({
+        name: "log_out",
+        description:
+          "Log the user out of their Google account and end the session. Use this when the user explicitly asks to log out, sign out, or switch accounts.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+        execute: async () => {
+          debugLogClient("tool", "log_out: executing");
+          // Small delay so the AI's farewell can be spoken
+          setTimeout(() => deps.onLogout(), 1500);
+          return { success: true, message: "Logging out. Goodbye!" };
+        },
+      }),
 
       tool({
         name: "get_session_summary",

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { EmailData, EmailTriageDeps } from "./index";
+import { EmailData, EmailTriageDeps, createEmailTriageAgent } from "./index";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -24,6 +24,10 @@ function makeDeps(emails: EmailData[] = []) {
     emails: [...emails],
     idx: 0,
     actions: { replied: 0, skipped: 0, archived: 0, blocked: 0, unsubscribed: 0 },
+    muted: false,
+    stopped: false,
+    loggedOut: false,
+    nextPageToken: undefined as string | undefined,
   };
   return {
     state,
@@ -31,6 +35,7 @@ function makeDeps(emails: EmailData[] = []) {
       emails: () => state.emails,
       setEmails: (e: EmailData[]) => { state.emails = e; },
       emailIndex: () => state.idx,
+      setEmailIndex: (i: number) => { state.idx = i; },
       advanceIndex: () => { state.idx++; },
       recordAction: (action: "reply" | "skip" | "archive" | "block" | "unsubscribe") => {
         if (action === "reply") state.actions.replied++;
@@ -42,6 +47,12 @@ function makeDeps(emails: EmailData[] = []) {
       getActionSummary: () => ({ ...state.actions }),
       calendarProfile: () => null,
       setCalendarProfile: () => {},
+      nextPageToken: () => state.nextPageToken,
+      setNextPageToken: (t: string | undefined) => { state.nextPageToken = t; },
+      dbAvailable: false,
+      onMute: () => { state.muted = true; },
+      onStop: () => { state.stopped = true; },
+      onLogout: () => { state.loggedOut = true; },
     } satisfies EmailTriageDeps,
   };
 }
@@ -147,6 +158,74 @@ describe("EmailTriageDeps logic", () => {
       const summary2 = deps.getActionSummary();
       expect(summary1.replied).toBe(1);
       expect(summary2.replied).toBe(2);
+    });
+  });
+
+  describe("session control tools", () => {
+    it("agent has mute_microphone, stop_conversation, and log_out tools", () => {
+      const { deps } = makeDeps();
+      const agent = createEmailTriageAgent(deps);
+      const toolNames = agent.tools.map((t: any) => t.name);
+      expect(toolNames).toContain("mute_microphone");
+      expect(toolNames).toContain("end_session");
+      expect(toolNames).toContain("log_out");
+      expect(toolNames).toContain("get_session_summary");
+    });
+
+    it("mute_microphone tool invokes onMute callback", async () => {
+      const { deps, state } = makeDeps();
+      const agent = createEmailTriageAgent(deps);
+      const muteTool = agent.tools.find((t: any) => t.name === "mute_microphone") as any;
+
+      const result = await muteTool.invoke({} as any, "{}");
+      expect(state.muted).toBe(true);
+      expect(result).toMatchObject({ success: true });
+    });
+
+    it("end_session tool invokes onStop after delay", async () => {
+      vi.useFakeTimers();
+      const { deps, state } = makeDeps();
+      const agent = createEmailTriageAgent(deps);
+      const stopTool = agent.tools.find((t: any) => t.name === "end_session") as any;
+
+      const result = await stopTool.invoke({} as any, "{}");
+      expect(result).toMatchObject({ success: true });
+      expect(state.stopped).toBe(false);
+      vi.advanceTimersByTime(1500);
+      expect(state.stopped).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it("log_out tool invokes onLogout after delay", async () => {
+      vi.useFakeTimers();
+      const { deps, state } = makeDeps();
+      const agent = createEmailTriageAgent(deps);
+      const logoutTool = agent.tools.find((t: any) => t.name === "log_out") as any;
+
+      const result = await logoutTool.invoke({} as any, "{}");
+      expect(result).toMatchObject({ success: true });
+      expect(state.loggedOut).toBe(false);
+      vi.advanceTimersByTime(1500);
+      expect(state.loggedOut).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it("get_session_summary returns correct totals", async () => {
+      mockFetch.mockResolvedValueOnce({ json: async () => ({}) }); // /api/log
+      const { deps } = makeDeps([makeEmail(), makeEmail(), makeEmail()]);
+      deps.recordAction("reply");
+      deps.recordAction("skip");
+      deps.advanceIndex();
+      deps.advanceIndex();
+
+      const agent = createEmailTriageAgent(deps);
+      const summaryTool = agent.tools.find((t: any) => t.name === "get_session_summary") as any;
+      const raw = await summaryTool.invoke({} as any, "{}");
+      const result = typeof raw === "string" ? JSON.parse(raw) : raw;
+      expect(result.replied).toBe(1);
+      expect(result.skipped).toBe(1);
+      expect(result.totalProcessed).toBe(2);
+      expect(result.remaining).toBe(1);
     });
   });
 

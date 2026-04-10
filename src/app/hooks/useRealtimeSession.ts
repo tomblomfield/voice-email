@@ -157,6 +157,14 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
           inputAudioTranscription: {
             model: 'gpt-4o-mini-transcribe',
           },
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 200,
+            silence_duration_ms: 500,
+            create_response: true,
+            eagerness: 'low',
+          },
         },
         outputGuardrails: outputGuardrails ?? [],
         context: extraContext ?? {},

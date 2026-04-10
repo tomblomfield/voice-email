@@ -194,39 +194,31 @@ function App() {
         extraContext: { addTranscriptBreadcrumb },
       });
 
-      setTimeout(() => {
-        sendEvent({
-          type: "session.update",
-          session: {
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 200,
-              silence_duration_ms: 500,
-              create_response: true,
-              eagerness: "low",
+      const sendReconnectEvents = () => {
+        try {
+          const id = crypto.randomUUID().replace(/-/g, "").slice(0, 32);
+          addTranscriptMessage(id, "user", "I'm back, continue where we left off", true);
+          sendEvent({
+            type: "conversation.item.create",
+            item: {
+              id,
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: "I'm back, continue where we left off with the next email",
+                },
+              ],
             },
-          },
-        });
-
-        const id = crypto.randomUUID().replace(/-/g, "").slice(0, 32);
-        addTranscriptMessage(id, "user", "I'm back, continue where we left off", true);
-        sendEvent({
-          type: "conversation.item.create",
-          item: {
-            id,
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "I'm back, continue where we left off with the next email",
-              },
-            ],
-          },
-        });
-        sendEvent({ type: "response.create" });
-      }, 500);
+          });
+          sendEvent({ type: "response.create" });
+        } catch (e) {
+          console.warn("Data channel not ready on reconnect, retrying...", e);
+          setTimeout(sendReconnectEvents, 500);
+        }
+      };
+      setTimeout(sendReconnectEvents, 500);
 
       reconnectAttemptRef.current = 0;
       isReconnectingRef.current = false;
@@ -287,6 +279,17 @@ function App() {
         nextPageToken: () => nextPageTokenRef.current,
         setNextPageToken: (token) => { nextPageTokenRef.current = token; },
         dbAvailable: session.dbAvailable,
+        onMute: () => {
+          setIsMuted(true);
+          mute(true);
+        },
+        onStop: () => {
+          disconnectFromRealtime();
+        },
+        onLogout: () => {
+          disconnectFromRealtime();
+          window.location.href = "/api/auth/logout";
+        },
       });
 
       connectOptionsRef.current = { agent };
@@ -298,34 +301,27 @@ function App() {
         extraContext: { addTranscriptBreadcrumb },
       });
 
-      setTimeout(() => {
-        sendEvent({
-          type: "session.update",
-          session: {
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 200,
-              silence_duration_ms: 500,
-              create_response: true,
-              eagerness: "low",
+      // Send initial "hi" after data channel is ready (turn_detection is set in session config)
+      const sendInitialEvents = () => {
+        try {
+          const id = crypto.randomUUID().replace(/-/g, "").slice(0, 32);
+          addTranscriptMessage(id, "user", "hi", true);
+          sendEvent({
+            type: "conversation.item.create",
+            item: {
+              id,
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "hi" }],
             },
-          },
-        });
-
-        const id = crypto.randomUUID().replace(/-/g, "").slice(0, 32);
-        addTranscriptMessage(id, "user", "hi", true);
-        sendEvent({
-          type: "conversation.item.create",
-          item: {
-            id,
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "hi" }],
-          },
-        });
-        sendEvent({ type: "response.create" });
-      }, 500);
+          });
+          sendEvent({ type: "response.create" });
+        } catch (e) {
+          console.warn("Data channel not ready, retrying...", e);
+          setTimeout(sendInitialEvents, 500);
+        }
+      };
+      setTimeout(sendInitialEvents, 500);
     } catch (err) {
       console.error("Error connecting:", err);
       setSessionStatus("DISCONNECTED");
@@ -346,6 +342,26 @@ function App() {
     const next = !isMuted;
     setIsMuted(next);
     mute(next);
+    // When unmuting, nudge the AI so it knows the user is back
+    if (!next && sessionStatus === "CONNECTED") {
+      const id = crypto.randomUUID().replace(/-/g, "").slice(0, 32);
+      addTranscriptMessage(id, "user", "I'm back", true);
+      sendEvent({
+        type: "conversation.item.create",
+        item: {
+          id,
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "The user just unmuted their microphone. They're ready to continue. Pick up where you left off.",
+            },
+          ],
+        },
+      });
+      sendEvent({ type: "response.create" });
+    }
   };
 
   const onToggleConnection = () => {
@@ -365,6 +381,15 @@ function App() {
   const isConnecting = sessionStatus === "CONNECTING";
   const isAuthenticated = authState?.authenticated ?? false;
   const filterWriteEnabled = authState?.filterWriteEnabled ?? false;
+
+  // Auto-start conversation when authenticated
+  const hasAutoStarted = useRef(false);
+  useEffect(() => {
+    if (isAuthenticated && sessionStatus === "DISCONNECTED" && !hasAutoStarted.current) {
+      hasAutoStarted.current = true;
+      connectToRealtime();
+    }
+  }, [isAuthenticated, sessionStatus]);
 
   if (authState === null) {
     return (
