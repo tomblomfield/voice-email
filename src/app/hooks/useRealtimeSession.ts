@@ -154,9 +154,6 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
         }),
         model: 'gpt-realtime-1.5',
         config: {
-          inputAudioTranscription: {
-            model: 'gpt-4o-mini-transcribe',
-          },
           turn_detection: {
             type: 'server_vad',
             threshold: 0.5,
@@ -165,6 +162,7 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
             create_response: true,
             eagerness: 'low',
           },
+          speed: 1.2,
         } as any,
         outputGuardrails: outputGuardrails ?? [],
         context: extraContext ?? {},
