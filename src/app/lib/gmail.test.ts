@@ -201,13 +201,13 @@ describe("voicemail footer", () => {
     expect(
       appendVoicemailFooter("Thanks for the note.  \n", "tomblomfield@gmail.com")
     ).toBe(
-      "Thanks for the note.\n\nsent with voicemail\nhttps://voice-mail.example.com"
+      "Thanks for the note.\n\nSent with voicemail.audio"
     );
   });
 
   it("falls back to the production URL when no env var is configured", () => {
     expect(appendVoicemailFooter("Checking in", "tb@ycombinator.com")).toBe(
-      "Checking in\n\nsent with voicemail\nhttps://voicemail.audio"
+      "Checking in\n\nSent with voicemail.audio"
     );
   });
 
