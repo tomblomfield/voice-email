@@ -44,6 +44,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/open-in-browser", request.url));
   }
 
+  // Next.js RSC prefetch sends fetch requests that follow redirects.
+  // Redirecting to accounts.google.com causes a CORS error because Google
+  // doesn't include Access-Control-Allow-Origin headers. Return a JSON
+  // response instead so the client falls back to full-page navigation.
+  const isRscPrefetch =
+    request.headers.get("rsc") || request.headers.get("next-router-prefetch");
+
   const addAccount = request.nextUrl.searchParams.get("addAccount") === "true";
   const redirectUri = getRedirectUri(request);
 
@@ -78,6 +85,10 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ authenticated: true });
       }
     }
+  }
+
+  if (isRscPrefetch) {
+    return NextResponse.json({ authenticated: false });
   }
 
   const url = getAuthUrl(redirectUri);

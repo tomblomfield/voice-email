@@ -52,6 +52,41 @@ railway up --detach --service voice-email
 
 The production URL is https://voice-email-production.up.railway.app.
 
+## Querying production users
+
+The production database is PostgreSQL on Railway. To list all signed-up users:
+
+```sh
+railway link --project voice-email
+railway variables -s Postgres 2>&1 | grep DATABASE_PUBLIC_URL
+```
+
+Then query using the public URL:
+
+```sh
+node -e "
+const { Pool } = require('pg');
+const pool = new Pool({ connectionString: '<DATABASE_PUBLIC_URL from above>' });
+pool.query('SELECT email, created_at::date AS signed_up, last_session_at::date AS last_active FROM users ORDER BY created_at').then(r => {
+  console.table(r.rows);
+  console.log('Total:', r.rows.length);
+  pool.end();
+});
+"
+```
+
+The public URL follows the pattern `postgresql://postgres:<password>@maglev.proxy.rlwy.net:<port>/railway`. The internal URL (`postgres.railway.internal`) only works from within Railway's network.
+
+The `users` table schema:
+- `id` (UUID, PK)
+- `email` (VARCHAR 255, unique)
+- `home_address`, `work_address` (TEXT)
+- `phone_number` (VARCHAR 50)
+- `conference_link` (TEXT)
+- `created_at`, `last_session_at`, `updated_at` (TIMESTAMPTZ)
+
+Related tables: `google_accounts` (linked OAuth accounts), `user_memories` (conversation context).
+
 ## Testing
 
 ```
