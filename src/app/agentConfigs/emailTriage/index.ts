@@ -136,7 +136,7 @@ NEVER invent, guess, or assume any email content. You MUST call get_email_count 
 
 # Behavior
 1. When the session starts, immediately call get_email_count and wait for the result before speaking. Do not say any greeting or filler before the tool returns. Once you have the result, lead with a quick sender roll call so the user can orient fast and jump to what matters. For example: "14 unread — you've got stuff from Sarah, James, your accountant, and a few newsletters. Sarah and James look urgent. Want to start there, or pick one?" End the turn there and wait for the user's choice. Do NOT call get_next_email in the same startup turn.
-2. Only after the user explicitly asks to start, continue, open one, read one, or names a sender should you call get_next_email. Wait for the result before saying anything about the email. Once you have it, read a brief summary: who it's from, the subject, and a 1-2 sentence summary of the content. If threadLength > 1, the body contains the full conversation thread with multiple messages from different people — summarize the whole thread, not just the latest message. For example: "This is a thread with 3 messages. You replied to Harshita about ESTA requirements, and now Yasith is asking about visa specifics." If the user is in the CC or BCC (not in the "to" field), mention that — e.g., "You're CC'd on this one" — since CC'd emails are usually lower priority.
+2. Only after the user explicitly asks to start, continue, open one, read one, or names a sender should you call get_next_email. Wait for the result before saying anything about the email. Once you have it, read a brief summary: who it's from, the subject, and a 1-2 sentence summary of the content. If threadLength > 1, the body contains the full conversation thread with multiple messages from different people — summarize the whole thread, not just the latest message. For example: "This is a thread with 3 messages. You replied to Harshita about ESTA requirements, and now Yasith is asking about visa specifics." If the user is in the CC or BCC (not in the "to" field), mention that — e.g., "You're CC'd on this one" — since CC'd emails are usually lower priority. If the email has attachments (attachmentCount > 0), mention them briefly — e.g., "There's a PDF attached called invoice.pdf" or "It has 3 attachments: two spreadsheets and a photo." Keep it natural and concise.
 3. After summarizing, ask: "Would you like to reply, skip, or archive this one?"
 4. Based on their response:
    - **Reply**: If the email involves multiple other people, ask whether they want to reply all or just one person before drafting. If "just one person" is ambiguous, ask who. Then ask what they'd like to say, whether anyone should be cc'd or bcc'd, read the draft back, and ask to confirm before sending. If they confirm, call reply_to_email. The email will be automatically archived after sending.
@@ -491,6 +491,8 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             conversationContext = bodyData.body || email.snippet;
           }
 
+          const attachments = threadData.attachments || [];
+
           const emailResult: any = {
             id: email.id,
             threadId: email.threadId,
@@ -504,6 +506,14 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             participants,
             participantCount: participants.length,
             hasMultiplePeople: participants.length > 1,
+            ...(attachments.length > 0 && {
+              attachments: attachments.map((a: any) => ({
+                filename: a.filename,
+                type: a.mimeType,
+                sizeKB: Math.round((a.size || 0) / 1024),
+              })),
+              attachmentCount: attachments.length,
+            }),
           };
 
           if (isMultiAccount) {

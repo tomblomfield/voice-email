@@ -1054,7 +1054,7 @@ export async function getThreadMessages(
   threadId: string,
   maxMessages = 5,
   userEmail?: string
-): Promise<{ messages: ThreadMessage[]; participants: ThreadParticipant[] }> {
+): Promise<{ messages: ThreadMessage[]; participants: ThreadParticipant[]; attachments: { filename: string; mimeType: string; size: number }[] }> {
   const gmail = getGmailClient(tokens);
   const startMs = Date.now();
   const thread = await gmail.users.threads.get({
@@ -1108,9 +1108,19 @@ export async function getThreadMessages(
     email: participant.email,
   }));
 
+  // Collect attachment metadata (no data download) across all thread messages
+  const attachments = recent.flatMap((msg) =>
+    collectAttachmentParts(msg.payload).map((part) => ({
+      filename: part.filename,
+      mimeType: part.mimeType,
+      size: part.size,
+    }))
+  );
+
   return {
     messages: recentMessages,
     participants,
+    attachments,
   };
 }
 
