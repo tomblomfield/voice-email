@@ -4,3 +4,5 @@ node_modules/
 token.json
 debug.log
 .gstack/
+telemetry-logs/
+telemetry-report.html
