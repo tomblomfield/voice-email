@@ -311,6 +311,68 @@ describe("EmailTriageDeps logic", () => {
       });
     });
 
+    it("archive tool removes the email thread from the local queue", async () => {
+      mockFetch.mockResolvedValue({ json: async () => ({ success: true }) });
+
+      const { deps, state } = makeDeps([
+        makeEmail({ id: "msg-1", threadId: "thread-1" }),
+        makeEmail({ id: "msg-2", threadId: "thread-2" }),
+      ]);
+      deps.advanceIndex();
+
+      const agent = createEmailTriageAgent(deps);
+      const archiveTool = agent.tools.find((t: any) => t.name === "archive_email") as any;
+
+      await archiveTool.invoke(
+        {} as any,
+        JSON.stringify({ message_id: "msg-1" })
+      );
+
+      expect(state.emails.map((email) => email.id)).toEqual(["msg-2"]);
+      expect(state.idx).toBe(0);
+    });
+
+    it("passes partial subject words through filter creation and retrospective apply", async () => {
+      mockFetch.mockResolvedValue({
+        json: async () => ({ success: true, archivedIds: ["msg-1"] }),
+      });
+
+      const { deps, state } = makeDeps([makeEmail({ id: "msg-1" })]);
+      const agent = createEmailTriageAgent(deps);
+      const applyTool = agent.tools.find(
+        (t: any) => t.name === "apply_archive_filter_for_email"
+      ) as any;
+      const retrospectiveTool = agent.tools.find(
+        (t: any) => t.name === "apply_filter_to_existing_emails"
+      ) as any;
+
+      await applyTool.invoke(
+        {} as any,
+        JSON.stringify({
+          message_id: "msg-1",
+          match_strategy: "from_and_subject",
+          subject_phrase: "Package Delivered",
+        })
+      );
+      await retrospectiveTool.invoke(
+        {} as any,
+        JSON.stringify({
+          message_id: "msg-1",
+          match_strategy: "from_and_subject",
+          subject_phrase: "Package Delivered",
+        })
+      );
+
+      const bodies = mockFetch.mock.calls.map((call) => JSON.parse(call[1].body));
+      expect(bodies.find((body) => body.action === "upsertArchiveFilter")).toMatchObject({
+        subjectPhrase: "Package Delivered",
+      });
+      expect(bodies.find((body) => body.action === "applyFilterToExisting")).toMatchObject({
+        subjectPhrase: "Package Delivered",
+      });
+      expect(state.emails).toEqual([]);
+    });
+
     it("reply then archive pattern", async () => {
       mockFetch
         .mockResolvedValueOnce({ json: async () => ({ success: true }) })

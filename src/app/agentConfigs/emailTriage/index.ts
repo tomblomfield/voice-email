@@ -122,6 +122,37 @@ export function createEmailTriageAgent(deps: EmailTriageDeps) {
     return email?.accountId;
   }
 
+  function removeEmailsFromQueue(options: {
+    messageIds?: string[];
+    threadIds?: string[];
+  }) {
+    const messageIds = new Set(options.messageIds || []);
+    const threadIds = new Set(options.threadIds || []);
+    if (messageIds.size === 0 && threadIds.size === 0) return;
+
+    const emails = deps.emails();
+    const currentIndex = deps.emailIndex();
+    const nextEmails: EmailData[] = [];
+    let removedBeforeCurrentIndex = 0;
+
+    emails.forEach((email, index) => {
+      const shouldRemove =
+        messageIds.has(email.id) || threadIds.has(email.threadId);
+      if (shouldRemove) {
+        if (index < currentIndex) removedBeforeCurrentIndex += 1;
+        return;
+      }
+      nextEmails.push(email);
+    });
+
+    if (nextEmails.length === emails.length) return;
+
+    deps.setEmails(nextEmails);
+    deps.setEmailIndex(
+      Math.max(0, currentIndex - removedBeforeCurrentIndex)
+    );
+  }
+
   const agent = new RealtimeAgent({
     name: "emailTriage",
     voice: "ash",
@@ -182,11 +213,13 @@ ${deps.dbAvailable ? `# Profile
 # Filters
 - If the user asks what Gmail filters are active, call list_gmail_filters and summarize the relevant ones.
 - If the user wants to auto-archive emails like the current one, first call preview_archive_filter_for_email for the current message. Explain the recommended match strategy before making changes.
-- Gmail subject filters use **partial matching** (substring search). A filter with subject "Your Receipt" will match emails with subject "Your Receipt from Carphone Warehouse", "Monthly Your Receipt", etc. When explaining the from_and_subject strategy, make this clear — the user does not need the exact full subject line.
+- Gmail subject filters should use a short, stable subject_phrase, not the full subject line. For example, for "Your Chemex Package was Delivered from Amazon", use "Package Delivered" if that is the user's intent.
+- For from_and_subject filters, pass subject_phrase as the exact few subject words you confirmed with the user. If the user did not provide a phrase, propose one from the preview and confirm it before creating the filter.
 - Prefer the narrower "from_and_subject" strategy unless the user clearly wants every message from that sender archived.
 - If preview_archive_filter_for_email shows a very close existing filter, offer to replace that filter instead of adding a duplicate. Be explicit that Gmail doesn't support editing filters directly, so replacing means delete-and-recreate.
 - Before calling apply_archive_filter_for_email, confirm whether they want a new filter or to replace an existing one.
-- After creating a filter, the response includes matchingInboxCount — the number of existing inbox emails that match. If matchingInboxCount > 0, tell the user and ask if they'd like to apply the filter retroactively. If they confirm, call apply_filter_to_existing_emails.
+- Gmail only applies a newly created filter to future mail. After creating a filter, the response includes matchingInboxCount — the number of existing inbox emails we found with the same criteria. If matchingInboxCount > 0, tell the user and ask if they'd like to apply the filter retroactively. If they confirm, call apply_filter_to_existing_emails with the same match_strategy and subject_phrase.
+- After apply_filter_to_existing_emails succeeds, those emails have likely been removed from the inbox. Do not present the same email again; move on with get_next_email.
 - If a filter tool says Gmail needs to be reconnected, tell the user to reconnect Gmail and do not keep retrying.
 
 # Prioritization
@@ -591,6 +624,10 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             threadId: args.thread_id,
             accountId,
           });
+          removeEmailsFromQueue({
+            messageIds: [args.message_id],
+            threadIds: [args.thread_id],
+          });
           deps.recordAction("reply");
           debugLogClient("tool", "reply_to_email: success");
           return { success: true, message: "Reply sent and email archived." };
@@ -678,6 +715,10 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             accountId,
           });
           if (data.error) { debugLogClient("error", "archive_email: failed", data.error); return { error: data.error }; }
+          removeEmailsFromQueue({
+            messageIds: [args.message_id],
+            threadIds: threadId ? [threadId] : [],
+          });
           deps.recordAction("archive");
           debugLogClient("tool", "archive_email: success");
           return { success: true, message: "Email archived." };
@@ -701,12 +742,17 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
         },
         execute: async (args: any) => {
           const accountId = getAccountIdForEmail(args.message_id);
+          const threadId = getThreadIdForEmail(args.message_id);
           const data = await gmailApi({
             action: "blockSender",
             messageId: args.message_id,
             accountId,
           });
           if (data.error) return data;
+          removeEmailsFromQueue({
+            messageIds: [args.message_id],
+            threadIds: threadId ? [threadId] : [],
+          });
           deps.recordAction("block");
           return {
             success: true,
@@ -747,6 +793,10 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             return { error: data.error };
           }
           if (data.success || data.method === "browser") {
+            removeEmailsFromQueue({
+              messageIds: [args.message_id],
+              threadIds: threadId ? [threadId] : [],
+            });
             deps.recordAction("unsubscribe");
           }
           debugLogClient("tool", `unsubscribe_from_email: ${data.method} — success=${data.success}`, data);
@@ -783,6 +833,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             accountId,
           });
           if (data.error) { debugLogClient("error", "skip_email: failed", data.error); return { error: data.error }; }
+          removeEmailsFromQueue({ messageIds: [args.message_id] });
           deps.recordAction("skip");
           debugLogClient("tool", "skip_email: success");
           return { success: true, message: "Email marked as read." };
@@ -1183,6 +1234,11 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
               type: "string",
               description: "The ID of the current email",
             },
+            subject_phrase: {
+              type: "string",
+              description:
+                "Optional short subject words the user wants to match, such as 'Package Delivered'.",
+            },
           },
           required: ["message_id"],
           additionalProperties: false,
@@ -1192,6 +1248,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           const data = await gmailApi({
             action: "previewArchiveFilter",
             messageId: args.message_id,
+            subjectPhrase: args.subject_phrase,
             accountId,
           });
           if (data.error) return data;
@@ -1215,6 +1272,11 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
               enum: ["from", "from_and_subject"],
               description: "How narrowly to match.",
             },
+            subject_phrase: {
+              type: "string",
+              description:
+                "For from_and_subject, the short subject words to match, not the full subject line.",
+            },
             existing_filter_id: {
               type: "string",
               description: "Optional existing Gmail filter ID to replace.",
@@ -1232,6 +1294,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
               args.match_strategy === "from_and_subject"
                 ? "fromAndSubject"
                 : "from",
+            subjectPhrase: args.subject_phrase,
             existingFilterId: args.existing_filter_id,
             accountId,
           });
@@ -1256,6 +1319,11 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
               enum: ["from", "from_and_subject"],
               description: "The same match strategy used when creating the filter.",
             },
+            subject_phrase: {
+              type: "string",
+              description:
+                "The same short subject words used when creating the filter.",
+            },
           },
           required: ["message_id", "match_strategy"],
           additionalProperties: false,
@@ -1269,9 +1337,18 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
               args.match_strategy === "from_and_subject"
                 ? "fromAndSubject"
                 : "from",
+            subjectPhrase: args.subject_phrase,
             accountId,
           });
           if (data.error) return data;
+          removeEmailsFromQueue({
+            messageIds:
+              data.archivedCount > 0
+                ? Array.from(
+                    new Set([args.message_id, ...(data.archivedIds || [])])
+                  )
+                : data.archivedIds || [],
+          });
           return data;
         },
       }),

@@ -35,6 +35,7 @@ import {
   parseAddressList,
   sendReply,
   shouldAddVoicemailFooter,
+  suggestSubjectPhraseForFilter,
   truncateToLatestMessage,
 } from "./gmail";
 
@@ -191,8 +192,30 @@ describe("filter helpers", () => {
       )
     ).toEqual({
       from: "alice@example.com",
-      subject: "Quarterly plan",
+      query: "subject:(Quarterly plan)",
     });
+  });
+
+  it("uses caller-provided subject words for archive filters", () => {
+    expect(
+      buildArchiveFilterCriteria(
+        "shipments@example.com",
+        "Your Chemex Package was Delivered from Amazon",
+        "fromAndSubject",
+        "Package Delivered"
+      )
+    ).toEqual({
+      from: "shipments@example.com",
+      query: "subject:(Package Delivered)",
+    });
+  });
+
+  it("suggests concise subject words for common transactional emails", () => {
+    expect(
+      suggestSubjectPhraseForFilter(
+        "Your Chemex Package was Delivered from Amazon"
+      )
+    ).toBe("Package Delivered");
   });
 
   it("falls back to sender-only matching when the subject is empty", () => {
@@ -206,11 +229,11 @@ describe("filter helpers", () => {
   it("describes archive filters in readable language", () => {
     expect(
       describeFilter(
-        { from: "alice@example.com", subject: "Quarterly plan" },
+        { from: "alice@example.com", query: "subject:(Quarterly plan)" },
         { removeLabelIds: ["INBOX"] }
       )
     ).toBe(
-      'If from alice@example.com, subject contains "Quarterly plan", then archive.'
+      'If from alice@example.com, subject has words "Quarterly plan", then archive.'
     );
   });
 
@@ -218,7 +241,7 @@ describe("filter helpers", () => {
     expect(
       buildSearchQueryFromCriteria({
         from: "alice@example.com",
-        subject: "Quarterly plan",
+        query: "subject:(Quarterly plan)",
       })
     ).toBe('from:(alice@example.com) subject:(Quarterly plan)');
 

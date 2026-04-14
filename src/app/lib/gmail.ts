@@ -20,6 +20,7 @@ export const GMAIL_SCOPES = [
 
 export const GMAIL_FILTER_WRITE_SCOPE =
   "https://www.googleapis.com/auth/gmail.settings.basic";
+const MAX_RETURNED_ARCHIVED_IDS = 200;
 
 export type FilterMatchStrategy = "from" | "fromAndSubject";
 
@@ -61,6 +62,7 @@ export interface ArchiveFilterPreview {
     subject: string;
   };
   recommendedStrategy: FilterMatchStrategy;
+  suggestedSubjectPhrases: string[];
   suggestions: ArchiveFilterSuggestion[];
   similarFilters: Array<
     GmailFilterSummary & {
@@ -645,16 +647,72 @@ export function normalizeSubjectForFilter(subject: string): string {
     .trim();
 }
 
+function normalizeSubjectPhraseForFilter(subjectPhrase: string): string {
+  return normalizeSubjectForFilter(subjectPhrase)
+    .replace(/^["']+|["']+$/g, "")
+    .replace(/[(){}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function suggestSubjectPhraseForFilter(subject: string): string {
+  const normalized = normalizeSubjectForFilter(subject);
+  const words = normalized.match(/[a-z0-9][a-z0-9'-]*/gi) || [];
+  const lowerWords = words.map((word) => word.toLowerCase());
+  const hasWord = (word: string) => lowerWords.includes(word);
+
+  const knownPatterns: Array<[string[], string]> = [
+    [["package", "delivered"], "Package Delivered"],
+    [["package", "shipped"], "Package Shipped"],
+    [["order", "delivered"], "Order Delivered"],
+    [["order", "shipped"], "Order Shipped"],
+    [["delivery", "scheduled"], "Delivery Scheduled"],
+    [["password", "reset"], "Password Reset"],
+    [["verification", "code"], "Verification Code"],
+    [["security", "alert"], "Security Alert"],
+  ];
+
+  for (const [requiredWords, phrase] of knownPatterns) {
+    if (requiredWords.every(hasWord)) return phrase;
+  }
+
+  const stopWords = new Set([
+    "a",
+    "an",
+    "and",
+    "for",
+    "from",
+    "is",
+    "of",
+    "on",
+    "the",
+    "to",
+    "was",
+    "with",
+    "your",
+  ]);
+  const candidates = words.filter((word) => !stopWords.has(word.toLowerCase()));
+  return (candidates.length ? candidates : words).slice(0, 4).join(" ");
+}
+
+function buildSubjectSearchQuery(subjectPhrase: string): string {
+  const normalized = normalizeSubjectPhraseForFilter(subjectPhrase);
+  return `subject:(${normalized})`;
+}
+
 export function buildArchiveFilterCriteria(
   fromEmail: string,
   subject: string,
-  matchStrategy: FilterMatchStrategy
+  matchStrategy: FilterMatchStrategy,
+  subjectPhrase?: string
 ): GmailFilterCriteria {
-  const normalizedSubject = normalizeSubjectForFilter(subject);
-  if (matchStrategy === "fromAndSubject" && normalizedSubject) {
+  const normalizedSubjectPhrase = normalizeSubjectPhraseForFilter(
+    subjectPhrase || suggestSubjectPhraseForFilter(subject)
+  );
+  if (matchStrategy === "fromAndSubject" && normalizedSubjectPhrase) {
     return {
       from: fromEmail,
-      subject: normalizedSubject,
+      query: buildSubjectSearchQuery(normalizedSubjectPhrase),
     };
   }
 
@@ -671,7 +729,14 @@ function summarizeFilterCriteria(criteria: GmailFilterCriteria) {
   if (criteria.from) parts.push(`from ${criteria.from}`);
   if (criteria.to) parts.push(`to ${criteria.to}`);
   if (criteria.subject) parts.push(`subject contains "${criteria.subject}"`);
-  if (criteria.query) parts.push(`query "${criteria.query}"`);
+  if (criteria.query) {
+    const subjectQuery = criteria.query.match(/^subject:\((.+)\)$/i);
+    parts.push(
+      subjectQuery
+        ? `subject has words "${subjectQuery[1]}"`
+        : `query "${criteria.query}"`
+    );
+  }
   if (criteria.negatedQuery) parts.push(`excluding "${criteria.negatedQuery}"`);
   if (criteria.hasAttachment) parts.push("has attachments");
   if (criteria.excludeChats) parts.push("excluding chats");
@@ -729,6 +794,12 @@ function getFilterMatchDetails(
   const filterSubject = normalizeSubjectForFilter(
     filter.criteria.subject || ""
   ).toLowerCase();
+  const subjectQueryMatch = query.match(/subject:\(([^)]+)\)/);
+  const subjectQueryTerms =
+    subjectQueryMatch?.[1]
+      .split(/\s+/)
+      .map((term) => term.replace(/^["']+|["']+$/g, ""))
+      .filter(Boolean) || [];
 
   if ((filter.criteria.from || "").toLowerCase() === fromEmail) {
     score += 70;
@@ -740,6 +811,13 @@ function getFilterMatchDetails(
 
   if (normalizedSubject && filterSubject === normalizedSubject) {
     score += 25;
+    reasons.push("matches this subject");
+  } else if (
+    normalizedSubject &&
+    subjectQueryTerms.length > 0 &&
+    subjectQueryTerms.every((term) => normalizedSubject.includes(term))
+  ) {
+    score += 20;
     reasons.push("matches this subject");
   } else if (normalizedSubject && query.includes(normalizedSubject)) {
     score += 15;
@@ -769,38 +847,12 @@ export function buildSearchQueryFromCriteria(criteria: GmailFilterCriteria): str
   return parts.join(" ");
 }
 
-async function countMatchingInboxEmails(
+async function listMatchingInboxMessageIds(
   tokens: any,
   criteria: GmailFilterCriteria
-): Promise<number> {
+): Promise<string[]> {
   const gmail = getGmailClient(tokens);
   const query = buildSearchQueryFromCriteria(criteria) + " in:inbox";
-  const res = await gmail.users.messages.list({
-    userId: "me",
-    q: query,
-    maxResults: 1,
-  });
-  return res.data.resultSizeEstimate || 0;
-}
-
-export async function applyFilterToExistingEmails(
-  tokens: any,
-  messageId: string,
-  matchStrategy: FilterMatchStrategy
-): Promise<{ archivedCount: number }> {
-  const gmail = getGmailClient(tokens);
-  const message = await getEmailMetadata(tokens, messageId);
-  const actualMatchStrategy =
-    matchStrategy === "fromAndSubject" && !message.subject
-      ? "from"
-      : matchStrategy;
-  const criteria = buildArchiveFilterCriteria(
-    message.fromEmail,
-    message.subject,
-    actualMatchStrategy
-  );
-  const query = buildSearchQueryFromCriteria(criteria) + " in:inbox";
-
   const messageIds: string[] = [];
   let pageToken: string | undefined;
 
@@ -818,7 +870,37 @@ export async function applyFilterToExistingEmails(
     pageToken = res.data.nextPageToken || undefined;
   } while (pageToken);
 
-  if (messageIds.length === 0) return { archivedCount: 0 };
+  return messageIds;
+}
+
+async function countMatchingInboxEmails(
+  tokens: any,
+  criteria: GmailFilterCriteria
+): Promise<number> {
+  return (await listMatchingInboxMessageIds(tokens, criteria)).length;
+}
+
+export async function applyFilterToExistingEmails(
+  tokens: any,
+  messageId: string,
+  matchStrategy: FilterMatchStrategy,
+  subjectPhrase?: string
+): Promise<{ archivedCount: number; archivedIds: string[] }> {
+  const gmail = getGmailClient(tokens);
+  const message = await getEmailMetadata(tokens, messageId);
+  const actualMatchStrategy =
+    matchStrategy === "fromAndSubject" && !message.subject
+      ? "from"
+      : matchStrategy;
+  const criteria = buildArchiveFilterCriteria(
+    message.fromEmail,
+    message.subject,
+    actualMatchStrategy,
+    subjectPhrase
+  );
+  const messageIds = await listMatchingInboxMessageIds(tokens, criteria);
+
+  if (messageIds.length === 0) return { archivedCount: 0, archivedIds: [] };
 
   for (let i = 0; i < messageIds.length; i += 1000) {
     const batch = messageIds.slice(i, i + 1000);
@@ -831,7 +913,10 @@ export async function applyFilterToExistingEmails(
     });
   }
 
-  return { archivedCount: messageIds.length };
+  return {
+    archivedCount: messageIds.length,
+    archivedIds: messageIds.slice(0, MAX_RETURNED_ARCHIVED_IDS),
+  };
 }
 
 function mergeArchiveAction(action?: GmailFilterAction): GmailFilterAction {
@@ -847,7 +932,13 @@ function mergeArchiveAction(action?: GmailFilterAction): GmailFilterAction {
 async function getEmailMetadata(
   tokens: any,
   messageId: string
-): Promise<{ from: string; fromName: string; fromEmail: string; subject: string }> {
+): Promise<{
+  from: string;
+  fromName: string;
+  fromEmail: string;
+  subject: string;
+  threadId: string;
+}> {
   const gmail = getGmailClient(tokens);
   const detail = await gmail.users.messages.get({
     userId: "me",
@@ -870,6 +961,7 @@ async function getEmailMetadata(
     fromName: sender.name || sender.email,
     fromEmail: sender.email,
     subject,
+    threadId: detail.data.threadId || messageId,
   };
 }
 
@@ -1288,7 +1380,8 @@ export async function listActiveFilters(
 
 export async function previewArchiveFilterForEmail(
   tokens: any,
-  messageId: string
+  messageId: string,
+  subjectPhrase?: string
 ): Promise<ArchiveFilterPreview> {
   const message = await getEmailMetadata(tokens, messageId);
   const filters = await listActiveFilters(tokens);
@@ -1310,6 +1403,13 @@ export async function previewArchiveFilterForEmail(
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
 
+  const providedSubjectPhrase = normalizeSubjectPhraseForFilter(subjectPhrase || "");
+  const suggestedSubjectPhrases = Array.from(
+    new Set(
+      [providedSubjectPhrase, suggestSubjectPhraseForFilter(message.subject)]
+        .filter(Boolean)
+    )
+  );
   const suggestionOrder: FilterMatchStrategy[] = [
     message.subject ? "fromAndSubject" : "from",
     "from",
@@ -1318,7 +1418,8 @@ export async function previewArchiveFilterForEmail(
     const criteria = buildArchiveFilterCriteria(
       message.fromEmail,
       message.subject,
-      strategy
+      strategy,
+      strategy === "fromAndSubject" ? suggestedSubjectPhrases[0] : undefined
     );
     return {
       matchStrategy: strategy,
@@ -1330,6 +1431,7 @@ export async function previewArchiveFilterForEmail(
   return {
     message,
     recommendedStrategy: message.subject ? "fromAndSubject" : "from",
+    suggestedSubjectPhrases,
     suggestions,
     similarFilters,
   };
@@ -1339,7 +1441,8 @@ export async function upsertArchiveFilterForEmail(
   tokens: any,
   messageId: string,
   matchStrategy: FilterMatchStrategy,
-  existingFilterId?: string
+  existingFilterId?: string,
+  subjectPhrase?: string
 ): Promise<{
   operation: "created" | "replaced";
   matchStrategy: FilterMatchStrategy;
@@ -1358,7 +1461,8 @@ export async function upsertArchiveFilterForEmail(
   const criteria = buildArchiveFilterCriteria(
     preview.message.fromEmail,
     preview.message.subject,
-    actualMatchStrategy
+    actualMatchStrategy,
+    subjectPhrase
   );
 
   if (!existingFilterId) {
@@ -1450,7 +1554,7 @@ export async function blockSender(
   });
 
   // Archive the current email too
-  await archiveEmail(tokens, messageId);
+  await archiveEmail(tokens, message.threadId);
 
   return {
     blockedEmail: message.fromEmail,

@@ -416,7 +416,8 @@ async function handleAction(
       if (!account) return { error: "Account not found" };
       return await previewArchiveFilterForEmail(
         account.tokens,
-        params.messageId
+        params.messageId,
+        params.subjectPhrase
       );
     }
     case "upsertArchiveFilter": {
@@ -426,7 +427,8 @@ async function handleAction(
         account.tokens,
         params.messageId,
         params.matchStrategy,
-        params.existingFilterId
+        params.existingFilterId,
+        params.subjectPhrase
       );
     }
     case "applyFilterToExisting": {
@@ -435,7 +437,8 @@ async function handleAction(
       return await applyFilterToExistingEmails(
         account.tokens,
         params.messageId,
-        params.matchStrategy
+        params.matchStrategy,
+        params.subjectPhrase
       );
     }
 
