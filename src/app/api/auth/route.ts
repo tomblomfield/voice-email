@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUrl } from "@/app/lib/gmail";
-import { SESSION_COOKIE_NAME, getSessionUserId } from "@/app/lib/session";
-import { countGoogleAccounts } from "@/app/lib/db";
+import {
+  SESSION_COOKIE_NAME,
+  ADD_ACCOUNT_STATE_MAX_AGE_MS,
+  createAddAccountState,
+  getSessionUserId,
+} from "@/app/lib/session";
+import {
+  countGoogleAccounts,
+  createOAuthStateNonce,
+  initDb,
+  storeOAuthStateNonce,
+} from "@/app/lib/db";
 
 function getRedirectUri(request: NextRequest): string {
   const host =
@@ -64,6 +74,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(new URL("/", request.url));
     }
 
+    await initDb();
     const count = await countGoogleAccounts(userId);
     if (count >= MAX_ACCOUNTS) {
       return NextResponse.redirect(
@@ -71,7 +82,16 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const url = getAuthUrl(redirectUri, { state: "addAccount" });
+    const nonce = createOAuthStateNonce();
+    await storeOAuthStateNonce(
+      userId,
+      nonce,
+      new Date(Date.now() + ADD_ACCOUNT_STATE_MAX_AGE_MS)
+    );
+
+    const url = getAuthUrl(redirectUri, {
+      state: createAddAccountState(userId, nonce),
+    });
     return NextResponse.redirect(url);
   }
 

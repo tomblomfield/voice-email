@@ -7,6 +7,9 @@ import {
   getUserMemories,
   saveUserMemories,
   getAllUsers,
+  createOAuthStateNonce,
+  storeOAuthStateNonce,
+  consumeOAuthStateNonce,
 } from "./db";
 import { Pool } from "pg";
 
@@ -128,5 +131,32 @@ describe("getAllUsers", () => {
     expect(testUser).toBeTruthy();
     expect(testUser!.created_at).toBeInstanceOf(Date);
     expect(testUser!.last_session_at).toBeInstanceOf(Date);
+  });
+});
+
+describe("oauth state nonces", () => {
+  it("allows a stored nonce to be consumed exactly once", async () => {
+    const user = await upsertUser(TEST_EMAIL);
+    expect(user).not.toBeNull();
+    const nonce = createOAuthStateNonce();
+
+    await storeOAuthStateNonce(
+      user!.id,
+      nonce,
+      new Date(Date.now() + 10 * 60 * 1000)
+    );
+
+    await expect(consumeOAuthStateNonce(user!.id, nonce)).resolves.toBe(true);
+    await expect(consumeOAuthStateNonce(user!.id, nonce)).resolves.toBe(false);
+  });
+
+  it("rejects expired nonces", async () => {
+    const user = await upsertUser(TEST_EMAIL);
+    expect(user).not.toBeNull();
+    const nonce = createOAuthStateNonce();
+
+    await storeOAuthStateNonce(user!.id, nonce, new Date(Date.now() - 1000));
+
+    await expect(consumeOAuthStateNonce(user!.id, nonce)).resolves.toBe(false);
   });
 });

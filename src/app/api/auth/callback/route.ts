@@ -8,13 +8,14 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE,
   createSessionCookieValue,
-  getSessionUserId,
+  parseAddAccountState,
 } from "@/app/lib/session";
 import {
   initDb,
   upsertUser,
   findUserByGoogleEmail,
   addGoogleAccount,
+  consumeOAuthStateNonce,
   countGoogleAccounts,
 } from "@/app/lib/db";
 
@@ -37,10 +38,6 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const redirectUri = getRedirectUri(request);
-    const tokens = await exchangeCode(code, redirectUri);
-    const encrypted = encryptTokens(tokens);
-
     const host =
       request.headers.get("x-forwarded-host") ||
       request.headers.get("host") ||
@@ -48,42 +45,55 @@ export async function GET(request: NextRequest) {
     const proto = request.headers.get("x-forwarded-proto") || "https";
     const origin = host ? `${proto}://${host}` : request.url;
     const response = NextResponse.redirect(new URL("/app", origin));
+    const addAccountState = parseAddAccountState(state);
+    const isAddAccount = addAccountState.isAddAccount;
+
+    if (
+      isAddAccount &&
+      (addAccountState.error ||
+        !addAccountState.userId ||
+        !addAccountState.nonce)
+    ) {
+      console.warn(
+        `auth_callback: add_account_invalid_state reason=${addAccountState.error || "missing"}`
+      );
+      return NextResponse.redirect(
+        new URL(
+          addAccountState.error === "expired"
+            ? "/app?error=add_account_state_expired"
+            : "/app?error=add_account_state_invalid",
+          origin
+        )
+      );
+    }
+
+    const redirectUri = getRedirectUri(request);
+    const tokens = await exchangeCode(code, redirectUri);
+    const encrypted = encryptTokens(tokens);
 
     await initDb();
 
     const email = await getUserEmail(tokens);
-    const isAddAccount = state === "addAccount";
     let userId: string;
 
     if (isAddAccount) {
-      // Adding account to an existing user session
-      const sessionCookie = request.cookies.get(SESSION_COOKIE_NAME);
-      const existingUserId = sessionCookie
-        ? getSessionUserId(sessionCookie.value)
-        : null;
+      userId = addAccountState.userId!;
+      const stateConsumed = await consumeOAuthStateNonce(
+        userId,
+        addAccountState.nonce!
+      );
 
-      if (!existingUserId) {
-        // Session expired during OAuth — treat as fresh login
-        const existing = await findUserByGoogleEmail(email);
-        if (existing) {
-          userId = existing.userId;
-          await addGoogleAccount(userId, email, encrypted, false);
-        } else {
-          const user = await upsertUser(email);
-          if (!user) {
-            return NextResponse.json(
-              { error: "Database error" },
-              { status: 500 }
-            );
-          }
-          userId = user.id;
-          await addGoogleAccount(userId, email, encrypted, true);
-        }
-      } else {
-        userId = existingUserId;
-        const isPrimary = (await countGoogleAccounts(userId)) === 0;
-        await addGoogleAccount(userId, email, encrypted, isPrimary);
+      if (!stateConsumed) {
+        console.warn(
+          `auth_callback: add_account_state_reused_or_expired email=${email}`
+        );
+        return NextResponse.redirect(
+          new URL("/app?error=add_account_state_invalid", origin)
+        );
       }
+
+      const isPrimary = (await countGoogleAccounts(userId)) === 0;
+      await addGoogleAccount(userId, email, encrypted, isPrimary);
     } else {
       // Regular login
       const existing = await findUserByGoogleEmail(email);

@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { Pool } from "pg";
 
 // Pool is only created when DATABASE_URL is set.
@@ -46,7 +47,63 @@ export async function initDb(): Promise<void> {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS oauth_states (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      nonce_hash VARCHAR(64) NOT NULL UNIQUE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      purpose VARCHAR(50) NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS oauth_states_user_purpose_idx
+      ON oauth_states (user_id, purpose);
   `);
+}
+
+function hashOAuthNonce(nonce: string): string {
+  return crypto.createHash("sha256").update(nonce).digest("hex");
+}
+
+export function createOAuthStateNonce(): string {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+export async function storeOAuthStateNonce(
+  userId: string,
+  nonce: string,
+  expiresAt: Date,
+  purpose: string = "addAccount"
+): Promise<void> {
+  if (!pool) throw new Error("Database not available");
+  await pool.query(`DELETE FROM oauth_states WHERE expires_at <= NOW()`);
+  await pool.query(
+    `INSERT INTO oauth_states (nonce_hash, user_id, purpose, expires_at)
+     VALUES ($1, $2, $3, $4)`,
+    [hashOAuthNonce(nonce), userId, purpose, expiresAt]
+  );
+}
+
+export async function consumeOAuthStateNonce(
+  userId: string,
+  nonce: string,
+  purpose: string = "addAccount"
+): Promise<boolean> {
+  if (!pool) return false;
+  const result = await pool.query(
+    `UPDATE oauth_states
+     SET used_at = NOW()
+     WHERE nonce_hash = $1
+       AND user_id = $2
+       AND purpose = $3
+       AND used_at IS NULL
+       AND expires_at > NOW()
+     RETURNING id`,
+    [hashOAuthNonce(nonce), userId, purpose]
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 // --- Users ---
