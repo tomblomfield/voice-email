@@ -136,10 +136,29 @@ function App() {
 
   const [isMuted, setIsMuted] = useState(false);
   const [showAccountPanel, setShowAccountPanel] = useState(false);
+  const accountPanelRef = useRef<HTMLDivElement>(null);
+  const accountToggleRef = useRef<HTMLButtonElement>(null);
   const [selectedVoiceModel, setSelectedVoiceModel] =
     useState<VoiceModelId>(DEFAULT_VOICE_MODEL);
   const [voiceSettings, setVoiceSettings] =
     useState<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
+
+  // Close account panel on click outside
+  useEffect(() => {
+    if (!showAccountPanel) return;
+    const handleClick = (e: MouseEvent) => {
+      if (
+        accountPanelRef.current &&
+        !accountPanelRef.current.contains(e.target as Node) &&
+        accountToggleRef.current &&
+        !accountToggleRef.current.contains(e.target as Node)
+      ) {
+        setShowAccountPanel(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showAccountPanel]);
 
   useEffect(() => {
     const stored = localStorage.getItem("voice-model");
@@ -665,6 +684,7 @@ function App() {
 
         {/* Account management toggle */}
         <button
+          ref={accountToggleRef}
           onClick={() => setShowAccountPanel(!showAccountPanel)}
           className="inline-block mt-2 text-xs text-gray-600 hover:text-gray-400 transition-colors"
         >
@@ -685,7 +705,7 @@ function App() {
 
       {/* Account management panel */}
       {showAccountPanel && (
-        <div className="w-full max-w-sm mt-4 p-4 rounded-2xl border border-gray-800/60 bg-gray-900/60">
+        <div ref={accountPanelRef} className="w-full max-w-sm mt-4 p-4 rounded-2xl border border-gray-800/60 bg-gray-900/60">
           <div className="text-sm font-medium text-gray-400 mb-3">
             Connected accounts
           </div>
