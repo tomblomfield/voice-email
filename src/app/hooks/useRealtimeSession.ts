@@ -54,6 +54,7 @@ type GeminiLiveRefs = {
   lastAudioChunkLogAt: number;
   muted: boolean;
   closed: boolean;
+  visibilityHandler: (() => void) | null;
 };
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -432,6 +433,10 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     const gemini = geminiRef.current;
     if (!gemini) return;
     gemini.closed = true;
+    if (gemini.visibilityHandler) {
+      document.removeEventListener("visibilitychange", gemini.visibilityHandler);
+      gemini.visibilityHandler = null;
+    }
     stopGeminiPlayback();
     try {
       gemini.processor.disconnect();
@@ -706,8 +711,28 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
             lastAudioChunkLogAt: 0,
             muted: false,
             closed: false,
+            visibilityHandler: null,
           };
           geminiRef.current = geminiRefs;
+
+          // Resume AudioContexts when screen unlocks / tab becomes visible.
+          // Browsers suspend AudioContext during screen lock, which kills
+          // both mic input and audio output for Gemini (WebRTC-based OpenAI
+          // sessions are unaffected because the browser keeps media sessions alive).
+          const visibilityHandler = () => {
+            const gemini = geminiRef.current;
+            if (!gemini || gemini.closed) return;
+            if (document.visibilityState === "visible") {
+              debugLogClient("event", "gemini_visibility_resumed", {
+                inputState: gemini.inputContext.state,
+                outputState: gemini.outputContext.state,
+              });
+              void resumeAudioContext(gemini.inputContext, "input-visibility");
+              void resumeAudioContext(gemini.outputContext, "output-visibility");
+            }
+          };
+          document.addEventListener("visibilitychange", visibilityHandler);
+          geminiRefs.visibilityHandler = visibilityHandler;
 
           processor.onaudioprocess = (event) => {
             const gemini = geminiRef.current;
