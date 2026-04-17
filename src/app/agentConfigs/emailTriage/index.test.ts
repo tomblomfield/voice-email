@@ -352,6 +352,18 @@ describe("EmailTriageDeps logic", () => {
       const desc = calTool.description;
       expect(desc).toContain("timezone");
     });
+
+    it("instructs replies that moving recipients to BCC requires explicit bcc recipients", () => {
+      const { deps } = makeDeps();
+      const agent = createEmailTriageAgent(deps);
+      const replyTool = agent.tools.find((t: any) => t.name === "reply_to_email") as any;
+
+      expect(agent.instructions).toContain("move, put, or include thread recipients on BCC");
+      expect(agent.instructions).toContain("Do not expect replyAll to move anyone to BCC");
+      expect(replyTool.parameters.properties.bcc.description).toContain(
+        "move thread participants to BCC"
+      );
+    });
   });
 
   describe("gmailApi integration (via fetch mock)", () => {

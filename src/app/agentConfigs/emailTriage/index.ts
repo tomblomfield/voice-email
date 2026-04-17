@@ -377,6 +377,13 @@ You are a voice-first email and calendar assistant. The user may not be looking 
 - The user can ask to send a new email. Use find_contact to resolve names. If multiple contacts match, read the top 2-3 and ask which one.
 - Always confirm recipient, any cc or bcc recipients, subject, and body before sending a new email.
 
+# Reply Recipients
+- Always confirm reply recipients, including cc and bcc, before sending.
+- For a normal single-person reply, use reply_mode "reply".
+- For a visible reply-all, use reply_mode "replyAll".
+- If the user asks to move, put, or include thread recipients on BCC, populate the bcc array with those exact email addresses from the current email or thread participants. Do not expect replyAll to move anyone to BCC.
+- If the user asks to reply to one person and BCC everyone else, use reply_mode "reply" with that one person as reply_to, and put the other requested non-user participants in bcc.
+
 # Calendar${deps.timezone ? `
 - The user's timezone is ${deps.timezone}. Always use this timezone when interpreting dates and times. When the user says "May 19th" or "tomorrow", construct ISO 8601 timestamps in their timezone (e.g., "2026-05-19T00:00:00-07:00" for America/Los_Angeles), NOT in UTC. This ensures calendar queries cover the correct local day.` : ''}
 - Use calendar tools for calendar questions, searches, creates, edits, and deletes.
@@ -775,7 +782,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
               type: "string",
               enum: ["reply", "replyAll"],
               description:
-                "Use replyAll when the user wants everyone on the latest message included.",
+                "Use replyAll only when the user wants everyone visible on the latest message. Use reply with bcc populated when moving recipients to BCC.",
             },
             reply_to: {
               type: "string",
@@ -790,7 +797,8 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             bcc: {
               type: "array",
               items: { type: "string" },
-              description: "Optional BCC recipients as email addresses.",
+              description:
+                "Optional BCC recipients as email addresses. For requests to move thread participants to BCC, fill this with the requested participants' exact email addresses.",
             },
           },
           required: ["message_id", "thread_id", "reply_text"],

@@ -611,4 +611,42 @@ describe("reply and forward formatting", () => {
     expect(raw).not.toContain("multipart/mixed");
     expect(raw).not.toContain("quarterly plan.pdf");
   });
+
+  it("sends explicit BCC recipients on single-person replies", async () => {
+    gmailMock.users.messages.get.mockResolvedValueOnce({
+      data: {
+        threadId: "thread-1",
+        snippet: "Original snippet",
+        payload: gmailPayload([
+          {
+            mimeType: "text/plain",
+            body: {
+              data: Buffer.from("Original body").toString("base64url"),
+            },
+          },
+        ]),
+      },
+    });
+    gmailMock.users.messages.send.mockResolvedValueOnce({
+      data: { id: "sent-1", threadId: "thread-1", labelIds: [] },
+    });
+
+    await sendReply(
+      {},
+      "msg-1",
+      "thread-1",
+      "Thanks",
+      "me@example.com",
+      {
+        mode: "reply",
+        bcc: ["Bob Example <bob@example.com>", "me@example.com"],
+      }
+    );
+
+    const raw = decodeSentRaw();
+    expect(raw).toContain("To: Alice Example <alice@example.com>");
+    expect(raw).not.toContain("Cc: Bob Example <bob@example.com>");
+    expect(raw).toContain("Bcc: Bob Example <bob@example.com>");
+    expect(raw).not.toContain("Bcc: me@example.com");
+  });
 });
