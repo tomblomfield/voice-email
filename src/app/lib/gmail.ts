@@ -1045,7 +1045,10 @@ export async function getUnreadEmails(
   debugLog("api", `threads.list [${Date.now() - startMs}ms] — ${res.data.threads?.length ?? 0} threads`);
   debugLogVerbose("api", "threads.list FULL RESPONSE", {
     resultSizeEstimate: res.data.resultSizeEstimate,
-    threads: res.data.threads?.map(t => ({ id: t.id, snippet: t.snippet })),
+    threads: res.data.threads?.map(t => ({
+      id: t.id,
+      snippetLength: t.snippet?.length ?? 0,
+    })),
     nextPageToken: res.data.nextPageToken,
   });
 
@@ -1128,7 +1131,7 @@ export async function getEmailBody(
   debugLogVerbose("api", `getEmailBody FULL RESPONSE (${messageId})`, {
     threadId: res.data.threadId,
     labelIds: res.data.labelIds,
-    snippet: res.data.snippet,
+    snippetLength: res.data.snippet?.length ?? 0,
     sizeEstimate: res.data.sizeEstimate,
     mimeType: res.data.payload?.mimeType,
     partCount: res.data.payload?.parts?.length,
@@ -1162,9 +1165,9 @@ export async function getThreadMessages(
     messages: messages.map(m => ({
       id: m.id,
       labelIds: m.labelIds,
-      snippet: m.snippet,
+      snippetLength: m.snippet?.length ?? 0,
       sizeEstimate: m.sizeEstimate,
-      from: m.payload?.headers?.find(h => h.name === "From")?.value,
+      hasFrom: !!m.payload?.headers?.find(h => h.name === "From")?.value,
       date: m.payload?.headers?.find(h => h.name === "Date")?.value,
     })),
   });
@@ -1280,10 +1283,11 @@ export async function sendReply(
     id: sendRes.data.id,
     threadId: sendRes.data.threadId,
     labelIds: sendRes.data.labelIds,
-    to: defaultReplyTarget,
-    cc,
-    bcc,
-    subject,
+    recipientCount:
+      parseAddressList(defaultReplyTarget).length + cc.length + bcc.length,
+    hasCc: cc.length > 0,
+    hasBcc: bcc.length > 0,
+    subjectLength: subject.length,
   });
 }
 

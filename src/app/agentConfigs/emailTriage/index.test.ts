@@ -61,6 +61,24 @@ function makeDeps(emails: EmailData[] = []) {
   };
 }
 
+function parseToolResult(raw: unknown) {
+  return typeof raw === "string" ? JSON.parse(raw) : raw;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function gmailCalls() {
+  return mockFetch.mock.calls.filter((call) => call[0] === "/api/gmail");
+}
+
 describe("EmailTriageDeps logic", () => {
   beforeEach(() => {
     mockFetch.mockReset();
@@ -359,6 +377,104 @@ describe("EmailTriageDeps logic", () => {
 
       expect(state.emails.map((email) => email.id)).toEqual(["msg-2"]);
       expect(state.idx).toBe(0);
+    });
+
+    it("prefetches thread bodies after email count and reuses the in-flight request", async () => {
+      const thread = deferred<any>();
+      mockFetch.mockImplementation((_url, init) => {
+        const body = JSON.parse(init.body);
+        if (body.action === "list") {
+          return Promise.resolve({
+            json: async () => ({
+              emails: [makeEmail({ body: undefined })],
+              accountPageTokens: {},
+            }),
+          });
+        }
+        if (body.action === "readThread") {
+          return thread.promise.then((data) => ({ json: async () => data }));
+        }
+        return Promise.resolve({ json: async () => ({ success: true }) });
+      });
+
+      const { deps } = makeDeps();
+      const agent = createEmailTriageAgent(deps);
+      const countTool = agent.tools.find((t: any) => t.name === "get_email_count") as any;
+      const nextTool = agent.tools.find((t: any) => t.name === "get_next_email") as any;
+
+      await countTool.invoke({} as any, "{}");
+      expect(
+        mockFetch.mock.calls.filter((call) => JSON.parse(call[1].body).action === "readThread")
+      ).toHaveLength(1);
+
+      const nextResultPromise = nextTool.invoke({} as any, "{}");
+      expect(
+        mockFetch.mock.calls.filter((call) => JSON.parse(call[1].body).action === "readThread")
+      ).toHaveLength(1);
+
+      thread.resolve({
+        messages: [{ from: "Alice <alice@example.com>", body: "Prefetched body" }],
+        participants: [],
+        attachments: [],
+      });
+
+      const result = parseToolResult(await nextResultPromise);
+      expect(result.body).toBe("Prefetched body");
+      expect(
+        mockFetch.mock.calls.filter((call) => JSON.parse(call[1].body).action === "readThread")
+      ).toHaveLength(1);
+    });
+
+    it("archive tool returns before the Gmail archive request completes", async () => {
+      const archive = deferred<any>();
+      mockFetch.mockReturnValue(archive.promise);
+
+      const { deps, state } = makeDeps([makeEmail()]);
+      const agent = createEmailTriageAgent(deps);
+      const archiveTool = agent.tools.find((t: any) => t.name === "archive_email") as any;
+
+      const result = await Promise.race([
+        archiveTool.invoke({} as any, JSON.stringify({ message_id: "msg-1" })),
+        new Promise((resolve) => setTimeout(() => resolve("timed out"), 20)),
+      ]);
+
+      expect(result).not.toBe("timed out");
+      expect(state.emails).toEqual([]);
+      expect(gmailCalls()).toHaveLength(1);
+      expect(JSON.parse(gmailCalls()[0][1].body)).toMatchObject({
+        action: "archive",
+        threadId: "thread-1",
+      });
+
+      archive.resolve({ json: async () => ({ success: true }) });
+    });
+
+    it("unsubscribe tool returns before the Gmail unsubscribe request completes", async () => {
+      const unsubscribe = deferred<any>();
+      mockFetch.mockReturnValue(unsubscribe.promise);
+
+      const { deps, state } = makeDeps([makeEmail()]);
+      const agent = createEmailTriageAgent(deps);
+      const unsubscribeTool = agent.tools.find((t: any) => t.name === "unsubscribe_from_email") as any;
+
+      const raw = await Promise.race([
+        unsubscribeTool.invoke({} as any, JSON.stringify({ message_id: "msg-1" })),
+        new Promise((resolve) => setTimeout(() => resolve("timed out"), 20)),
+      ]);
+      const result = parseToolResult(raw);
+
+      expect(raw).not.toBe("timed out");
+      expect(result).toMatchObject({ success: true, background: true });
+      expect(state.emails).toEqual([]);
+      expect(state.actions.unsubscribed).toBe(1);
+      expect(gmailCalls()).toHaveLength(1);
+      expect(JSON.parse(gmailCalls()[0][1].body)).toMatchObject({
+        action: "unsubscribe",
+        messageId: "msg-1",
+        threadId: "thread-1",
+      });
+
+      unsubscribe.resolve({ json: async () => ({ success: true }) });
     });
 
     it("passes partial subject words through filter creation and retrospective apply", async () => {

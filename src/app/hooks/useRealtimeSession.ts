@@ -373,12 +373,14 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     }
 
     const args = functionCall.args ?? {};
-    debugLogClient("tool", `GEMINI TOOL START: ${functionCall.name}`, { args });
+    debugLogClient("tool", `GEMINI TOOL START: ${functionCall.name}`, {
+      argKeys: Object.keys(args),
+    });
     addTranscriptBreadcrumb(`function call: ${functionCall.name}`, args);
 
     try {
       const result = await tool.invoke(undefined as any, JSON.stringify(args));
-      debugLogClient("tool", `GEMINI TOOL END: ${functionCall.name}`, { result });
+      debugLogClient("tool", `GEMINI TOOL END: ${functionCall.name}`);
       addTranscriptBreadcrumb(`function call result: ${functionCall.name}`, result as any);
       gemini.session.sendToolResponse({
         functionResponses: {

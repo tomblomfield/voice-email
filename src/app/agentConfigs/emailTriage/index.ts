@@ -1,17 +1,64 @@
 import { RealtimeAgent, tool } from "@openai/agents/realtime";
 import type { InferredCalendarProfile } from "@/app/lib/calendar";
 import { debugLogClient, debugLogClientVerbose } from "@/app/lib/debugLog";
+import { logClientLatencyTelemetry } from "@/app/lib/telemetry";
 
-async function gmailApi(body: Record<string, any>) {
-  debugLogClient("tool", `gmailApi request: action=${body.action}`, body);
+const PREFETCH_THREAD_COUNT = 5;
+
+const REDACTED_TEXT_KEYS = new Set([
+  "body",
+  "snippet",
+  "subject",
+  "from",
+  "to",
+  "cc",
+  "bcc",
+  "replyTo",
+  "reply_text",
+]);
+
+const REDACTED_ARRAY_KEYS = new Set([
+  "emails",
+  "messages",
+  "participants",
+  "attachments",
+  "contacts",
+]);
+
+function redactForLog(value: unknown, key = ""): unknown {
+  if (value === null || value === undefined) return value;
+  if (REDACTED_TEXT_KEYS.has(key)) {
+    return typeof value === "string" ? `[redacted ${value.length} chars]` : "[redacted]";
+  }
+  if (Array.isArray(value)) {
+    if (REDACTED_ARRAY_KEYS.has(key)) return `[redacted ${value.length} ${key}]`;
+    return value.map((item) => redactForLog(item));
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
+        childKey,
+        redactForLog(childValue, childKey),
+      ])
+    );
+  }
+  return value;
+}
+
+async function gmailApi(
+  body: Record<string, any>,
+  options: { keepalive?: boolean } = {}
+) {
+  debugLogClient("tool", `gmailApi request: action=${body.action}`, redactForLog(body));
   const startMs = Date.now();
   const res = await fetch("/api/gmail", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    keepalive: options.keepalive,
   });
   const data = await res.json();
-  debugLogClient("tool", `gmailApi response: action=${body.action} [${Date.now() - startMs}ms] status=${res.status}`, data);
+  debugLogClient("tool", `gmailApi response: action=${body.action} [${Date.now() - startMs}ms] status=${res.status}`, redactForLog(data));
   return data;
 }
 
@@ -91,6 +138,29 @@ If the user wants to focus on just one account (e.g., "just my work emails", "fo
 
 export function createEmailTriageAgent(deps: EmailTriageDeps) {
   const isMultiAccount = deps.accounts.length > 1;
+  const prefetchedThreads = new Map<string, any>();
+  const inFlightThreadFetches = new Map<string, Promise<any>>();
+
+  function logReadThreadCacheTelemetry(
+    operation: string,
+    durationMs: number,
+    status: "ok" | "error" = "ok",
+    metrics: Record<string, string | number | boolean | null | undefined> = {}
+  ) {
+    logClientLatencyTelemetry({
+      provider: "gmail",
+      operation,
+      durationMs,
+      status,
+      model: deps.logContext?.model,
+      metrics: {
+        accountScope: isMultiAccount ? "multi" : "single",
+        cacheSize: prefetchedThreads.size,
+        inFlightCount: inFlightThreadFetches.size,
+        ...metrics,
+      },
+    });
+  }
 
   async function getOrLoadCalendarProfile() {
     const cached = deps.calendarProfile();
@@ -127,6 +197,121 @@ export function createEmailTriageAgent(deps: EmailTriageDeps) {
     const emails = deps.emails();
     const email = emails.find((e) => e.id === messageId);
     return email?.accountId;
+  }
+
+  function threadCacheKey(email: Pick<EmailData, "threadId" | "accountId">) {
+    return `${email.accountId || "primary"}:${email.threadId}`;
+  }
+
+  function forgetThreadCache(threadId?: string, accountId?: string) {
+    if (!threadId) return;
+    prefetchedThreads.delete(`${accountId || "primary"}:${threadId}`);
+  }
+
+  function fetchThreadForEmail(
+    email: EmailData,
+    source: "prefetch" | "get_next_email" = "get_next_email"
+  ): Promise<any> {
+    const key = threadCacheKey(email);
+    const cached = prefetchedThreads.get(key);
+    if (cached) {
+      debugLogClient("tool", "readThread cache hit", { threadId: email.threadId });
+      logReadThreadCacheTelemetry("readThread.cache_hit", 0, "ok", {
+        prefetch: source === "prefetch",
+      });
+      return Promise.resolve(cached);
+    }
+
+    const inFlight = inFlightThreadFetches.get(key);
+    if (inFlight) {
+      debugLogClient("tool", "readThread awaiting prefetch", { threadId: email.threadId });
+      const waitStartMs = Date.now();
+      return inFlight.then((data) => {
+        logReadThreadCacheTelemetry(
+          "readThread.inflight_wait",
+          Date.now() - waitStartMs,
+          data?.error ? "error" : "ok",
+          { prefetch: source === "prefetch" }
+        );
+        return data;
+      });
+    }
+
+    debugLogClient("tool", "readThread cache miss", { threadId: email.threadId });
+    logReadThreadCacheTelemetry("readThread.cache_miss", 0, "ok", {
+      prefetch: source === "prefetch",
+    });
+    const fetchStartMs = Date.now();
+    const promise = gmailApi({
+      action: "readThread",
+      threadId: email.threadId,
+      accountId: email.accountId,
+    })
+      .then((data) => {
+        if (!data?.error) prefetchedThreads.set(key, data);
+        logReadThreadCacheTelemetry(
+          "readThread.server_fetch",
+          Date.now() - fetchStartMs,
+          data?.error ? "error" : "ok",
+          { prefetch: source === "prefetch" }
+        );
+        return data;
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        debugLogClient("error", "readThread prefetch failed", {
+          threadId: email.threadId,
+          error: message,
+        });
+        logReadThreadCacheTelemetry(
+          "readThread.server_fetch",
+          Date.now() - fetchStartMs,
+          "error",
+          { prefetch: source === "prefetch" }
+        );
+        return { error: message };
+      })
+      .finally(() => {
+        inFlightThreadFetches.delete(key);
+      });
+
+    inFlightThreadFetches.set(key, promise);
+    return promise;
+  }
+
+  function prefetchLikelyThreads(emails: EmailData[], startIndex = 0) {
+    const candidates = emails
+      .slice(Math.max(0, startIndex), Math.max(0, startIndex) + PREFETCH_THREAD_COUNT)
+      .filter((email) => email.threadId);
+
+    for (const email of candidates) {
+      const key = threadCacheKey(email);
+      if (prefetchedThreads.has(key) || inFlightThreadFetches.has(key)) continue;
+      void fetchThreadForEmail(email, "prefetch");
+    }
+  }
+
+  function runBackgroundGmailAction(
+    label: string,
+    body: Record<string, any>
+  ) {
+    void gmailApi(body, { keepalive: true })
+      .then((data) => {
+        if (data?.error) {
+          debugLogClient("error", `${label}: background failed`, data.error);
+          return;
+        }
+        debugLogClient("tool", `${label}: background complete`, {
+          action: body.action,
+          success: data?.success,
+          method: data?.method,
+        });
+      })
+      .catch((error) => {
+        debugLogClient("error", `${label}: background error`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
   }
 
   function removeEmailsFromQueue(options: {
@@ -294,6 +479,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           deps.setEmails(emails);
           deps.setEmailIndex(0);
           deps.setNextPageTokens(data.accountPageTokens || {});
+          prefetchLikelyThreads(emails, 0);
 
           // Build per-account counts for multi-account
           const accountCounts: Record<string, number> = {};
@@ -329,7 +515,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           }
 
           debugLogClient("tool", `get_email_count: ${emails.length} emails`);
-          debugLogClientVerbose("tool", "get_email_count → LLM TOOL RESULT", result);
+          debugLogClientVerbose("tool", "get_email_count → LLM TOOL RESULT", redactForLog(result));
           return result;
         },
       }),
@@ -356,6 +542,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           deps.setEmails(emails);
           deps.setEmailIndex(0);
           deps.setNextPageTokens(data.accountPageTokens || {});
+          prefetchLikelyThreads(emails, 0);
 
           const result = {
             count: emails.length,
@@ -376,7 +563,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             })),
           };
           debugLogClient("tool", `reload_emails: ${emails.length} emails`);
-          debugLogClientVerbose("tool", "reload_emails → LLM TOOL RESULT", result);
+          debugLogClientVerbose("tool", "reload_emails → LLM TOOL RESULT", redactForLog(result));
           return result;
         },
       }),
@@ -414,6 +601,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           const existingEmails = deps.emails();
           deps.setEmails([...existingEmails, ...newEmails]);
           deps.setNextPageTokens(data.accountPageTokens || {});
+          prefetchLikelyThreads(newEmails, 0);
           const result = {
             count: newEmails.length,
             total_loaded: existingEmails.length + newEmails.length,
@@ -434,7 +622,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             })),
           };
           debugLogClient("tool", `fetch_more_emails: ${newEmails.length} new emails`);
-          debugLogClientVerbose("tool", "fetch_more_emails → LLM TOOL RESULT", result);
+          debugLogClientVerbose("tool", "fetch_more_emails → LLM TOOL RESULT", redactForLog(result));
           return result;
         },
       }),
@@ -500,12 +688,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           const email = emails[emailIdx];
           deps.advanceIndex();
 
-          // Fetch thread context
-          const threadData = await gmailApi({
-            action: "readThread",
-            threadId: email.threadId,
-            accountId: email.accountId,
-          });
+          const threadData = await fetchThreadForEmail(email);
 
           const threadMessages = threadData.messages || [];
           const participants = threadData.participants || [];
@@ -554,9 +737,15 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             emailResult.accountId = email.accountId;
             emailResult.accountName = email.accountName;
           }
+          prefetchLikelyThreads(deps.emails(), deps.emailIndex());
 
-          debugLogClient("tool", `get_next_email: returning email from=${email.from} subject="${email.subject}" bodyLen=${emailResult.body.length} threadLen=${threadMessages.length}`);
-          debugLogClientVerbose("tool", "get_next_email → LLM TOOL RESULT (FULL)", emailResult);
+          debugLogClient("tool", "get_next_email: returning email", {
+            messageId: email.id,
+            threadId: email.threadId,
+            bodyLen: emailResult.body.length,
+            threadLen: threadMessages.length,
+          });
+          debugLogClientVerbose("tool", "get_next_email → LLM TOOL RESULT", redactForLog(emailResult));
           return emailResult;
         },
       }),
@@ -606,7 +795,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           additionalProperties: false,
         },
         execute: async (args: any) => {
-          debugLogClient("tool", "reply_to_email: executing", args);
+          debugLogClient("tool", "reply_to_email: executing", redactForLog(args));
           const accountId = getAccountIdForEmail(args.message_id);
           const data = await gmailApi({
             action: "reply",
@@ -620,11 +809,12 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             accountId,
           });
           if (data.error) { debugLogClient("error", "reply_to_email: failed", data.error); return { error: data.error }; }
-          await gmailApi({
+          runBackgroundGmailAction("reply_to_email archive", {
             action: "archive",
             threadId: args.thread_id,
             accountId,
           });
+          forgetThreadCache(args.thread_id, accountId);
           removeEmailsFromQueue({
             messageIds: [args.message_id],
             threadIds: [args.thread_id],
@@ -671,7 +861,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           additionalProperties: false,
         },
         execute: async (args: any) => {
-          debugLogClient("tool", "forward_email: executing", args);
+          debugLogClient("tool", "forward_email: executing", redactForLog(args));
           const accountId = getAccountIdForEmail(args.message_id);
           const data = await gmailApi({
             action: "forward",
@@ -710,19 +900,19 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           debugLogClient("tool", "archive_email: executing", args);
           const accountId = getAccountIdForEmail(args.message_id);
           const threadId = getThreadIdForEmail(args.message_id);
-          const data = await gmailApi({
+          runBackgroundGmailAction("archive_email", {
             action: "archive",
             threadId: threadId || args.message_id,
             accountId,
           });
-          if (data.error) { debugLogClient("error", "archive_email: failed", data.error); return { error: data.error }; }
+          forgetThreadCache(threadId, accountId);
           removeEmailsFromQueue({
             messageIds: [args.message_id],
             threadIds: threadId ? [threadId] : [],
           });
           deps.recordAction("archive");
-          debugLogClient("tool", "archive_email: success");
-          return { success: true, message: "Email archived." };
+          debugLogClient("tool", "archive_email: queued background archive");
+          return { success: true, background: true, message: "Email archived." };
         },
       }),
 
@@ -783,29 +973,23 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
           debugLogClient("tool", "unsubscribe_from_email: executing", args);
           const accountId = getAccountIdForEmail(args.message_id);
           const threadId = getThreadIdForEmail(args.message_id);
-          const data = await gmailApi({
+          runBackgroundGmailAction("unsubscribe_from_email", {
             action: "unsubscribe",
             messageId: args.message_id,
             threadId,
             accountId,
           });
-          if (data.error) {
-            debugLogClient("error", "unsubscribe_from_email: failed", data.error);
-            return { error: data.error };
-          }
-          if (data.success || data.method === "browser") {
-            removeEmailsFromQueue({
-              messageIds: [args.message_id],
-              threadIds: threadId ? [threadId] : [],
-            });
-            deps.recordAction("unsubscribe");
-          }
-          debugLogClient("tool", `unsubscribe_from_email: ${data.method} — success=${data.success}`, data);
+          forgetThreadCache(threadId, accountId);
+          removeEmailsFromQueue({
+            messageIds: [args.message_id],
+            threadIds: threadId ? [threadId] : [],
+          });
+          deps.recordAction("unsubscribe");
+          debugLogClient("tool", "unsubscribe_from_email: queued background unsubscribe");
           return {
-            success: data.success,
-            method: data.method,
-            message: data.message,
-            browserTaskId: data.browserTaskId || null,
+            success: true,
+            background: true,
+            message: "Started unsubscribing from this sender in the background.",
           };
         },
       }),
@@ -834,6 +1018,8 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             accountId,
           });
           if (data.error) { debugLogClient("error", "skip_email: failed", data.error); return { error: data.error }; }
+          const threadId = getThreadIdForEmail(args.message_id);
+          forgetThreadCache(threadId, accountId);
           removeEmailsFromQueue({ messageIds: [args.message_id] });
           deps.recordAction("skip");
           debugLogClient("tool", "skip_email: success");
@@ -886,7 +1072,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
             })),
           };
           debugLogClient("tool", `search_emails: ${result.count} results`);
-          debugLogClientVerbose("tool", "search_emails → LLM TOOL RESULT", result);
+          debugLogClientVerbose("tool", "search_emails → LLM TOOL RESULT", redactForLog(result));
           return result;
         },
       }),
@@ -1438,6 +1624,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
                 deps.setEmails(emails);
                 deps.setEmailIndex(0);
                 deps.setNextPageTokens(data.accountPageTokens || {});
+                prefetchLikelyThreads(emails, 0);
                 const account = deps.accounts.find((a) => a.id === args.account_id);
                 const name = account?.displayName || account?.email || "selected account";
                 debugLogClient("tool", `focus_account: focused on ${name}, ${emails.length} emails`);
@@ -1482,6 +1669,7 @@ ${buildMultiAccountInstructions(deps.accounts)}`,
                 deps.setEmails(emails);
                 deps.setEmailIndex(0);
                 deps.setNextPageTokens(data.accountPageTokens || {});
+                prefetchLikelyThreads(emails, 0);
                 debugLogClient("tool", `focus_all_accounts: ${emails.length} emails from all accounts`);
                 return {
                   success: true,

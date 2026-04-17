@@ -39,6 +39,45 @@ import {
 } from "@/app/lib/db";
 import { SESSION_COOKIE_NAME, getSessionUserId } from "@/app/lib/session";
 
+const REDACTED_TEXT_KEYS = new Set([
+  "body",
+  "snippet",
+  "subject",
+  "from",
+  "to",
+  "cc",
+  "bcc",
+  "replyTo",
+]);
+
+const REDACTED_ARRAY_KEYS = new Set([
+  "emails",
+  "messages",
+  "participants",
+  "attachments",
+  "contacts",
+]);
+
+function redactForLog(value: unknown, key = ""): unknown {
+  if (value === null || value === undefined) return value;
+  if (REDACTED_TEXT_KEYS.has(key)) {
+    return typeof value === "string" ? `[redacted ${value.length} chars]` : "[redacted]";
+  }
+  if (Array.isArray(value)) {
+    if (REDACTED_ARRAY_KEYS.has(key)) return `[redacted ${value.length} ${key}]`;
+    return value.map((item) => redactForLog(item));
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
+        childKey,
+        redactForLog(childValue, childKey),
+      ])
+    );
+  }
+  return value;
+}
+
 // ────────────────────────────────────────────
 // Auth resolution
 // ────────────────────────────────────────────
@@ -554,7 +593,7 @@ export async function POST(request: NextRequest) {
   }
 
   const { action, ...params } = await request.json();
-  debugLog("api", `POST /api/gmail — action=${action}`, params);
+  debugLog("api", `POST /api/gmail — action=${action}`, redactForLog(params));
   const startMs = Date.now();
 
   try {
@@ -581,7 +620,7 @@ export async function POST(request: NextRequest) {
     debugLog(
       "api",
       `POST /api/gmail — action=${action} DONE [${elapsed}ms]`,
-      result
+      redactForLog(result)
     );
     logLatencyTelemetry({
       provider: "gmail",
